@@ -1,0 +1,116 @@
+import enum
+
+from sqlalchemy import (
+    Column, Integer, String, Text, Boolean, ForeignKey, DateTime, Enum, JSON, Float
+)
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
+from app.db import Base
+
+
+class BurnerStatus(str, enum.Enum):
+    active = "active"
+    needs_relogin = "needs_relogin"
+    dead = "dead"
+
+
+class DraftStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    posted = "posted"
+
+
+class Client(Base):
+    __tablename__ = "clients"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    specialty = Column(String, nullable=False)
+    tone_profile = Column(Text, default="")  # short doc: voice, do's/don'ts, sample phrases
+    topics = Column(JSON, default=list)  # keywords/hashtags to search
+    burner_id = Column(Integer, ForeignKey("burners.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    burner = relationship("Burner", back_populates="clients")
+    watch_creators = relationship("WatchCreator", back_populates="client", cascade="all, delete-orphan")
+    posts = relationship("Post", back_populates="client", cascade="all, delete-orphan")
+
+
+class WatchCreator(Base):
+    __tablename__ = "watch_creators"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    profile_url = Column(String, nullable=False)
+    label = Column(String, default="")
+
+    client = relationship("Client", back_populates="watch_creators")
+
+
+class Burner(Base):
+    __tablename__ = "burners"
+
+    id = Column(Integer, primary_key=True)
+    label = Column(String, nullable=False)
+    status = Column(Enum(BurnerStatus), default=BurnerStatus.active)
+    storage_state_path = Column(String, nullable=False)  # path to persisted cookies/session
+    proxy_url = Column(String, nullable=True)  # e.g. http://user:pass@proxy.packetstream.io:31112
+    last_health_check_at = Column(DateTime, nullable=True)
+    last_health_ok = Column(Boolean, default=True)
+    actions_today = Column(Integer, default=0)
+    actions_reset_at = Column(DateTime, nullable=True)
+
+    clients = relationship("Client", back_populates="burner")
+
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    burner_id = Column(Integer, ForeignKey("burners.id"), nullable=True)
+
+    source_type = Column(String, nullable=False)  # "keyword" | "creator"
+    source_ref = Column(String, nullable=False)  # keyword text or creator profile url
+
+    author_name = Column(String, default="")
+    author_profile_url = Column(String, default="")
+    post_url = Column(String, nullable=False, unique=True)
+    content_snippet = Column(Text, default="")
+    posted_at = Column(DateTime, nullable=True)
+    engagement = Column(JSON, default=dict)  # {"likes": n, "comments": n}
+
+    relevance_score = Column(Float, nullable=True)
+    relevance_reason = Column(Text, default="")
+
+    fetched_at = Column(DateTime, server_default=func.now())
+
+    client = relationship("Client", back_populates="posts")
+    drafts = relationship("Draft", back_populates="post", cascade="all, delete-orphan")
+
+
+class Draft(Base):
+    __tablename__ = "drafts"
+
+    id = Column(Integer, primary_key=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    variant_index = Column(Integer, default=0)
+    text = Column(Text, nullable=False)
+    edited_text = Column(Text, nullable=True)
+    status = Column(Enum(DraftStatus), default=DraftStatus.pending)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    post = relationship("Post", back_populates="drafts")
+
+
+class BurnerEvent(Base):
+    __tablename__ = "burner_events"
+
+    id = Column(Integer, primary_key=True)
+    burner_id = Column(Integer, ForeignKey("burners.id"), nullable=False)
+    event_type = Column(String, nullable=False)  # "health_check" | "checkpoint" | "banned" | "redistributed"
+    detail = Column(Text, default="")
+    created_at = Column(DateTime, server_default=func.now())
