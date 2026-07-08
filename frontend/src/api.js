@@ -5,7 +5,10 @@ async function request(path, options = {}) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
-  if (!res.ok) throw new Error(`${options.method || "GET"} ${path} failed: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `${options.method || "GET"} ${path} failed: ${res.status}`);
+  }
   return res.json();
 }
 

@@ -38,7 +38,7 @@ export default function Dashboard() {
       await api.syncClient(selectedClientId);
       loadPosts();
     } catch (e) {
-      setSyncError("Sync failed — see backend logs.");
+      setSyncError(e.message || "Sync failed — see backend logs.");
     } finally {
       setSyncing(false);
     }
