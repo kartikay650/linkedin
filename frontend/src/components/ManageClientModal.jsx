@@ -22,14 +22,101 @@ const inputStyle = {
   fontFamily: "inherit",
 };
 
-export default function ManageClientModal({ open, onClose, client }) {
+export default function ManageClientModal({ open, onClose, client, onUpdated }) {
   if (!open || !client) return null;
   return (
     <Modal open={open} onClose={onClose} title={`Manage ${client.name}`} width={640}>
+      <ClientDetailsSection client={client} onUpdated={onUpdated} />
       <WatchCreatorsSection client={client} />
       <ProspectsSection client={client} />
       <ToneDocumentsSection client={client} />
     </Modal>
+  );
+}
+
+function ClientDetailsSection({ client, onUpdated }) {
+  const [name, setName] = useState(client.name);
+  const [specialty, setSpecialty] = useState(client.specialty);
+  const [topics, setTopics] = useState(client.topics.join(", "));
+  const [burnerId, setBurnerId] = useState(client.burner_id ? String(client.burner_id) : "");
+  const [burners, setBurners] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    api.listBurners().then(setBurners);
+    setName(client.name);
+    setSpecialty(client.specialty);
+    setTopics(client.topics.join(", "));
+    setBurnerId(client.burner_id ? String(client.burner_id) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client.id]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaved(false);
+    setError(null);
+    try {
+      await api.updateClient(client.id, {
+        name: name.trim(),
+        specialty: specialty.trim(),
+        topics: topics.split(",").map((t) => t.trim()).filter(Boolean),
+        burner_id: burnerId ? Number(burnerId) : null,
+      });
+      setSaved(true);
+      onUpdated?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section style={sectionStyle}>
+      <div style={sectionTitleStyle}>Client details</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Name</label>
+          <input style={{ ...inputStyle, width: "100%" }} value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Specialty</label>
+          <input style={{ ...inputStyle, width: "100%" }} value={specialty} onChange={(e) => setSpecialty(e.target.value)} />
+        </div>
+        <div>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+            Topics (comma-separated)
+          </label>
+          <input style={{ ...inputStyle, width: "100%" }} value={topics} onChange={(e) => setTopics(e.target.value)} />
+        </div>
+        <div>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+            Burner account
+          </label>
+          <select style={{ ...inputStyle, width: "100%" }} value={burnerId} onChange={(e) => setBurnerId(e.target.value)}>
+            <option value="">— none assigned —</option>
+            {burners.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label} ({b.status})
+              </option>
+            ))}
+          </select>
+        </div>
+        {error && <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
+          {saved && <span style={{ fontSize: 12, color: "var(--success)" }}>Saved</span>}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{ ...smallButtonStyle, background: "var(--primary)", color: "#fff", border: "none" }}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 

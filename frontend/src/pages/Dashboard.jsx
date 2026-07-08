@@ -150,6 +150,7 @@ export default function Dashboard() {
         open={showManageClient}
         onClose={() => setShowManageClient(false)}
         client={selectedClient}
+        onUpdated={loadClients}
       />
     </div>
   );

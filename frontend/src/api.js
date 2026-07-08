@@ -25,6 +25,7 @@ async function requestForm(path, formData) {
 
 export const api = {
   listClients: () => request("/clients"),
+  listBurners: () => request("/burners"),
   createClient: (payload) => request("/clients", { method: "POST", body: JSON.stringify(payload) }),
   updateClient: (clientId, payload) =>
     request(`/clients/${clientId}`, { method: "PATCH", body: JSON.stringify(payload) }),

@@ -21,6 +21,7 @@ class ClientCreate(BaseModel):
     specialty: str
     tone_profile: str = ""
     topics: list[str] = []
+    burner_id: Optional[int] = None
 
 
 class ClientUpdate(BaseModel):
@@ -28,6 +29,7 @@ class ClientUpdate(BaseModel):
     specialty: Optional[str] = None
     tone_profile: Optional[str] = None
     topics: Optional[list[str]] = None
+    burner_id: Optional[int] = None
 
 
 class WatchCreatorOut(BaseModel):

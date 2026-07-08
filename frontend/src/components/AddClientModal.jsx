@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Modal from "./Modal";
 import { api } from "../api";
 
@@ -18,8 +18,18 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const [specialty, setSpecialty] = useState("");
   const [toneProfile, setToneProfile] = useState("");
   const [topics, setTopics] = useState("");
+  const [burnerId, setBurnerId] = useState("");
+  const [burners, setBurners] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!open) return;
+    api.listBurners().then((data) => {
+      setBurners(data);
+      if (data.length > 0) setBurnerId(String(data[0].id));
+    });
+  }, [open]);
 
   const reset = () => {
     setName("");
@@ -48,6 +58,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         specialty: specialty.trim(),
         tone_profile: toneProfile.trim(),
         topics: topics.split(",").map((t) => t.trim()).filter(Boolean),
+        burner_id: burnerId ? Number(burnerId) : null,
       });
       reset();
       onCreated(client);
@@ -82,6 +93,26 @@ export default function AddClientModal({ open, onClose, onCreated }) {
             onChange={(e) => setTopics(e.target.value)}
             placeholder="heart failure, statins, cardiac imaging"
           />
+        </div>
+        <div>
+          <label style={labelStyle}>Burner account (fetches this client's posts)</label>
+          {burners.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--danger)" }}>
+              No burner accounts registered yet — this client can be added, but "Sync now" won't work until one is.
+            </div>
+          ) : (
+            <select
+              style={inputStyle}
+              value={burnerId}
+              onChange={(e) => setBurnerId(e.target.value)}
+            >
+              {burners.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label} ({b.status})
+                </option>
+              ))}
+            </select>
+          )}
         </div>
         <div>
           <label style={labelStyle}>Tone profile (optional — can add later from documents)</label>

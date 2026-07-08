@@ -11,7 +11,7 @@ from app.docs.extract import extract_text
 from app.docs.youtube import TranscriptUnavailable, extract_youtube_transcript
 from app.jobs.discovery import run_discovery_for_client
 from app.llm.tone_synthesis import synthesize_tone_profile
-from app.models import Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
+from app.models import Burner, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
 from app.schemas import (
     ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ProspectOut,
     ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
@@ -29,6 +29,9 @@ def list_clients(db: Session = Depends(get_db)):
 
 @router.post("", response_model=ClientOut)
 def create_client(payload: ClientCreate, db: Session = Depends(get_db)):
+    if payload.burner_id is not None and not db.get(Burner, payload.burner_id):
+        raise HTTPException(400, f"burner {payload.burner_id} not found")
+
     client = Client(**payload.model_dump())
     db.add(client)
     db.commit()
@@ -50,7 +53,11 @@ def update_client(client_id: int, payload: ClientUpdate, db: Session = Depends(g
     if not client:
         raise HTTPException(404, "client not found")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    if updates.get("burner_id") is not None and not db.get(Burner, updates["burner_id"]):
+        raise HTTPException(400, f"burner {updates['burner_id']} not found")
+
+    for field, value in updates.items():
         setattr(client, field, value)
     db.commit()
     db.refresh(client)
