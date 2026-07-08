@@ -2,6 +2,9 @@ import { useEffect, useState, useCallback } from "react";
 import { api } from "../api.js";
 import Sidebar from "../components/Sidebar.jsx";
 import PostCard from "../components/PostCard.jsx";
+import EmptyState from "../components/EmptyState.jsx";
+import AddClientModal from "../components/AddClientModal.jsx";
+import ManageClientModal from "../components/ManageClientModal.jsx";
 
 export default function Dashboard() {
   const [clients, setClients] = useState([]);
@@ -10,13 +13,21 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
+  const [showAddClient, setShowAddClient] = useState(false);
+  const [showManageClient, setShowManageClient] = useState(false);
 
-  useEffect(() => {
-    api.listClients().then((data) => {
+  const loadClients = useCallback(() => {
+    return api.listClients().then((data) => {
       setClients(data);
-      if (data.length > 0) setSelectedClientId(data[0].id);
+      return data;
     });
   }, []);
+
+  useEffect(() => {
+    loadClients().then((data) => {
+      if (data.length > 0) setSelectedClientId(data[0].id);
+    });
+  }, [loadClients]);
 
   const loadPosts = useCallback(() => {
     if (!selectedClientId) return;
@@ -48,7 +59,12 @@ export default function Dashboard() {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
-      <Sidebar clients={clients} selectedId={selectedClientId} onSelect={setSelectedClientId} />
+      <Sidebar
+        clients={clients}
+        selectedId={selectedClientId}
+        onSelect={setSelectedClientId}
+        onAddClient={() => setShowAddClient(true)}
+      />
 
       <main style={{ flex: 1, padding: "32px 40px", maxWidth: 760 }}>
         {selectedClient && (
@@ -59,30 +75,46 @@ export default function Dashboard() {
                 {selectedClient.specialty} — review queue
               </div>
             </div>
-            <div style={{ textAlign: "right" }}>
+            <div style={{ textAlign: "right", display: "flex", gap: 8 }}>
               <button
-                onClick={handleSync}
-                disabled={syncing}
+                onClick={() => setShowManageClient(true)}
                 style={{
                   padding: "8px 16px",
                   borderRadius: 8,
                   border: "1px solid var(--border)",
-                  background: syncing ? "#f2f4f7" : "var(--surface)",
+                  background: "var(--surface)",
                   fontSize: 13,
                   fontWeight: 600,
                   boxShadow: "var(--shadow)",
                 }}
               >
-                {syncing ? "Syncing…" : "Sync now"}
+                Manage profiles
               </button>
-              {syncing && (
-                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, maxWidth: 200 }}>
-                  Can take a few minutes — requests are deliberately paced to protect the account.
-                </div>
-              )}
-              {syncError && (
-                <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>{syncError}</div>
-              )}
+              <div>
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 8,
+                    border: "1px solid var(--border)",
+                    background: syncing ? "#f2f4f7" : "var(--surface)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    boxShadow: "var(--shadow)",
+                  }}
+                >
+                  {syncing ? "Syncing…" : "Sync now"}
+                </button>
+                {syncing && (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, maxWidth: 200 }}>
+                    Can take a few minutes — requests are deliberately paced to protect the account.
+                  </div>
+                )}
+                {syncError && (
+                  <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6, maxWidth: 200 }}>{syncError}</div>
+                )}
+              </div>
             </div>
           </header>
         )}
@@ -104,23 +136,21 @@ export default function Dashboard() {
           !loading &&
           posts.map((post) => <PostCard key={post.id} post={post} onActioned={loadPosts} />)}
       </main>
-    </div>
-  );
-}
 
-function EmptyState({ title, subtitle }) {
-  return (
-    <div
-      style={{
-        border: "1px dashed var(--border)",
-        borderRadius: "var(--radius)",
-        padding: "48px 24px",
-        textAlign: "center",
-        color: "var(--text-muted)",
-      }}
-    >
-      <div style={{ fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>{title}</div>
-      <div style={{ fontSize: 14 }}>{subtitle}</div>
+      <AddClientModal
+        open={showAddClient}
+        onClose={() => setShowAddClient(false)}
+        onCreated={(client) => {
+          setShowAddClient(false);
+          loadClients().then(() => setSelectedClientId(client.id));
+        }}
+      />
+
+      <ManageClientModal
+        open={showManageClient}
+        onClose={() => setShowManageClient(false)}
+        client={selectedClient}
+      />
     </div>
   );
 }

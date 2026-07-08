@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export default function Sidebar({ clients, selectedId, onSelect }) {
+export default function Sidebar({ clients, selectedId, onSelect, onAddClient }) {
   const [query, setQuery] = useState("");
 
   const filtered = clients.filter((c) =>
@@ -20,9 +20,28 @@ export default function Sidebar({ clients, selectedId, onSelect }) {
         flexDirection: "column",
       }}
     >
-      <div style={{ padding: "20px 16px 12px" }}>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 2 }}>Engagement Queue</div>
-        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{clients.length} clients</div>
+      <div style={{ padding: "20px 16px 12px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 2 }}>Engagement Queue</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{clients.length} clients</div>
+        </div>
+        <button
+          onClick={onAddClient}
+          title="Add client"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "var(--surface)",
+            fontSize: 16,
+            fontWeight: 600,
+            color: "var(--primary)",
+            lineHeight: 1,
+          }}
+        >
+          +
+        </button>
       </div>
 
       <div style={{ padding: "0 16px 12px" }}>
