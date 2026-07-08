@@ -16,6 +16,9 @@ class Settings(BaseSettings):
 
     alert_webhook_url: str = ""  # Slack/Telegram incoming webhook
 
+    client_docs_dir: str = "/app/client_docs"
+    max_upload_size_mb: int = 15
+
     # Safety defaults — intentionally not exposed to the dashboard/ops UI.
     max_actions_per_burner_per_day: int = 20
     min_delay_seconds: int = 45

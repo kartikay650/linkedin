@@ -8,6 +8,8 @@ class ClientOut(BaseModel):
     id: int
     name: str
     specialty: str
+    tone_profile: str
+    topics: list[str]
     burner_id: Optional[int]
 
     class Config:
@@ -19,6 +21,13 @@ class ClientCreate(BaseModel):
     specialty: str
     tone_profile: str = ""
     topics: list[str] = []
+
+
+class ClientUpdate(BaseModel):
+    name: Optional[str] = None
+    specialty: Optional[str] = None
+    tone_profile: Optional[str] = None
+    topics: Optional[list[str]] = None
 
 
 class WatchCreatorOut(BaseModel):
@@ -84,3 +93,40 @@ class DraftUpdate(BaseModel):
 
 class PostWithDrafts(PostOut):
     drafts: list[DraftOut] = []
+
+
+class ClientDocumentOut(BaseModel):
+    id: int
+    client_id: int
+    source_type: str
+    source_url: Optional[str]
+    original_filename: Optional[str]
+    status: str
+    error_detail: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class YoutubeDocumentCreate(BaseModel):
+    url: str
+
+
+class ToneSynthesisOut(BaseModel):
+    proposed_tone_profile: str
+    source_document_ids: list[int]
+
+
+class ProspectOut(BaseModel):
+    id: int
+    client_id: int
+    profile_url: str
+    name: str
+    headline: str
+    source: str
+    status: str
+    discovered_at: datetime
+
+    class Config:
+        from_attributes = True

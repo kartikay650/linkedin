@@ -1,7 +1,7 @@
 import enum
 
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, ForeignKey, DateTime, Enum, JSON, Float
+    Column, Integer, String, Text, Boolean, ForeignKey, DateTime, Enum, JSON, Float, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -22,6 +22,28 @@ class DraftStatus(str, enum.Enum):
     posted = "posted"
 
 
+class DocumentSource(str, enum.Enum):
+    youtube = "youtube"
+    upload = "upload"
+
+
+class DocumentStatus(str, enum.Enum):
+    pending = "pending"
+    processing = "processing"
+    done = "done"
+    failed = "failed"
+
+
+class ProspectSource(str, enum.Enum):
+    keyword_search = "keyword_search"  # only source today; discovery itself is stubbed
+
+
+class ProspectStatus(str, enum.Enum):
+    pending_review = "pending_review"
+    approved = "approved"
+    rejected = "rejected"
+
+
 class Client(Base):
     __tablename__ = "clients"
 
@@ -36,10 +58,13 @@ class Client(Base):
     burner = relationship("Burner", back_populates="clients")
     watch_creators = relationship("WatchCreator", back_populates="client", cascade="all, delete-orphan")
     posts = relationship("Post", back_populates="client", cascade="all, delete-orphan")
+    documents = relationship("ClientDocument", back_populates="client", cascade="all, delete-orphan")
+    prospects = relationship("Prospect", back_populates="client", cascade="all, delete-orphan")
 
 
 class WatchCreator(Base):
     __tablename__ = "watch_creators"
+    __table_args__ = (UniqueConstraint("client_id", "profile_url", name="uq_watch_creator_client_profile"),)
 
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
@@ -47,6 +72,38 @@ class WatchCreator(Base):
     label = Column(String, default="")
 
     client = relationship("Client", back_populates="watch_creators")
+
+
+class ClientDocument(Base):
+    __tablename__ = "client_documents"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    source_type = Column(Enum(DocumentSource), nullable=False)
+    source_url = Column(String, nullable=True)  # youtube URL
+    original_filename = Column(String, nullable=True)  # upload
+    storage_path = Column(String, nullable=True)  # server-generated disk path, upload only
+    extracted_text = Column(Text, default="")
+    status = Column(Enum(DocumentStatus), default=DocumentStatus.pending)
+    error_detail = Column(Text, default="")
+    created_at = Column(DateTime, server_default=func.now())
+
+    client = relationship("Client", back_populates="documents")
+
+
+class Prospect(Base):
+    __tablename__ = "prospects"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    profile_url = Column(String, nullable=False)
+    name = Column(String, default="")
+    headline = Column(String, default="")
+    source = Column(Enum(ProspectSource), default=ProspectSource.keyword_search)
+    status = Column(Enum(ProspectStatus), default=ProspectStatus.pending_review)
+    discovered_at = Column(DateTime, server_default=func.now())
+
+    client = relationship("Client", back_populates="prospects")
 
 
 class Burner(Base):

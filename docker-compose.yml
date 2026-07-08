@@ -22,6 +22,7 @@ services:
       - redis
     volumes:
       - ./sessions:/app/sessions
+      - ./client_docs:/app/client_docs
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   scheduler:

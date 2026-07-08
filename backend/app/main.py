@@ -1,10 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db import Base, engine
 from app.routers import accounts, clients, posts
-
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="LinkedIn Engagement Dashboard API")
 
