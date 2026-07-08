@@ -18,8 +18,11 @@ def main() -> None:
     args = parser.parse_args()
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
-        context = browser.new_context()
+        # Match burner_page()'s launch args/viewport exactly — logging in with a
+        # different browser fingerprint than the one that will consume the
+        # session is what triggers an immediate re-checkpoint on first use.
+        browser = pw.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
+        context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
         page.goto("https://www.linkedin.com/login")
 
