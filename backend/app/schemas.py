@@ -8,6 +8,7 @@ class ClientOut(BaseModel):
     id: int
     name: str
     specialty: str
+    linkedin_url: Optional[str]
     tone_profile: str
     topics: list[str]
     burner_id: Optional[int]
@@ -19,6 +20,7 @@ class ClientOut(BaseModel):
 class ClientCreate(BaseModel):
     name: str
     specialty: str
+    linkedin_url: Optional[str] = None
     tone_profile: str = ""
     topics: list[str] = []
     burner_id: Optional[int] = None
@@ -27,9 +29,21 @@ class ClientCreate(BaseModel):
 class ClientUpdate(BaseModel):
     name: Optional[str] = None
     specialty: Optional[str] = None
+    linkedin_url: Optional[str] = None
     tone_profile: Optional[str] = None
     topics: Optional[list[str]] = None
     burner_id: Optional[int] = None
+
+
+class ProfilePreviewRequest(BaseModel):
+    linkedin_url: str
+    burner_id: int
+
+
+class ProfilePreviewOut(BaseModel):
+    name: str
+    headline: str
+    about: str
 
 
 class WatchCreatorOut(BaseModel):

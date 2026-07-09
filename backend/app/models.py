@@ -50,6 +50,7 @@ class Client(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     specialty = Column(String, nullable=False)
+    linkedin_url = Column(String, nullable=True)  # the client's own profile, not a watch-creator
     tone_profile = Column(Text, default="")  # short doc: voice, do's/don'ts, sample phrases
     topics = Column(JSON, default=list)  # keywords/hashtags to search
     burner_id = Column(Integer, ForeignKey("burners.id"), nullable=True)

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Modal from "./Modal";
+import ToneDocumentsSection from "./ToneDocumentsSection";
 import { api } from "../api";
 
 const inputStyle = {
@@ -14,14 +15,19 @@ const inputStyle = {
 const labelStyle = { fontSize: 12, fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: 4 };
 
 export default function AddClientModal({ open, onClose, onCreated }) {
+  const [step, setStep] = useState("details"); // "details" | "documents"
   const [name, setName] = useState("");
   const [specialty, setSpecialty] = useState("");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
   const [toneProfile, setToneProfile] = useState("");
   const [topics, setTopics] = useState("");
   const [burnerId, setBurnerId] = useState("");
   const [burners, setBurners] = useState([]);
+  const [fetching, setFetching] = useState(false);
+  const [fetchNote, setFetchNote] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [createdClient, setCreatedClient] = useState(null);
 
   useEffect(() => {
     if (!open) return;
@@ -32,11 +38,15 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   }, [open]);
 
   const reset = () => {
+    setStep("details");
     setName("");
     setSpecialty("");
+    setLinkedinUrl("");
     setToneProfile("");
     setTopics("");
+    setFetchNote(null);
     setError(null);
+    setCreatedClient(null);
   };
 
   const handleClose = () => {
@@ -44,7 +54,26 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     onClose();
   };
 
-  const handleSubmit = async (e) => {
+  const handleFetchFromLinkedin = async () => {
+    if (!linkedinUrl.trim() || !burnerId) return;
+    setFetching(true);
+    setFetchNote(null);
+    setError(null);
+    try {
+      const preview = await api.fetchProfilePreview(linkedinUrl.trim(), Number(burnerId));
+      if (preview.name) setName(preview.name);
+      if (preview.headline) setSpecialty(preview.headline);
+      if (preview.about) setToneProfile(preview.about);
+      setFetchNote("Pulled from LinkedIn — review and edit anything before saving.");
+    } catch (err) {
+      setFetchNote(null);
+      setError(err.message);
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const handleCreateDetails = async (e) => {
     e.preventDefault();
     if (!name.trim() || !specialty.trim()) {
       setError("Name and specialty are required.");
@@ -56,12 +85,13 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       const client = await api.createClient({
         name: name.trim(),
         specialty: specialty.trim(),
+        linkedin_url: linkedinUrl.trim() || null,
         tone_profile: toneProfile.trim(),
         topics: topics.split(",").map((t) => t.trim()).filter(Boolean),
         burner_id: burnerId ? Number(burnerId) : null,
       });
-      reset();
-      onCreated(client);
+      setCreatedClient(client);
+      setStep("documents");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -69,9 +99,71 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     }
   };
 
+  const handleFinish = () => {
+    const client = createdClient;
+    reset();
+    onCreated(client);
+  };
+
+  if (step === "documents" && createdClient) {
+    return (
+      <Modal open={open} onClose={handleFinish} title={`Add reference material for ${createdClient.name}`}>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+          Optional — upload interview transcripts, YouTube URLs, or writing samples now, or skip and add them later
+          from "Manage profiles."
+        </div>
+        <ToneDocumentsSection client={createdClient} />
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+          <button
+            onClick={handleFinish}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 8,
+              border: "none",
+              background: "var(--primary)",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            Done
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
   return (
     <Modal open={open} onClose={handleClose} title="Add client">
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <form onSubmit={handleCreateDetails} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <label style={labelStyle}>Client's LinkedIn profile</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              style={inputStyle}
+              value={linkedinUrl}
+              onChange={(e) => setLinkedinUrl(e.target.value)}
+              placeholder="https://www.linkedin.com/in/..."
+            />
+            <button
+              type="button"
+              onClick={handleFetchFromLinkedin}
+              disabled={fetching || !linkedinUrl.trim() || !burnerId}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border)",
+                background: "var(--surface)",
+                fontSize: 12,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {fetching ? "Fetching…" : "Fetch details"}
+            </button>
+          </div>
+          {fetchNote && <div style={{ fontSize: 12, color: "var(--success)", marginTop: 4 }}>{fetchNote}</div>}
+        </div>
         <div>
           <label style={labelStyle}>Name</label>
           <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="Dr. Jane Smith" />
@@ -115,7 +207,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
           )}
         </div>
         <div>
-          <label style={labelStyle}>Tone profile (optional — can add later from documents)</label>
+          <label style={labelStyle}>Tone profile (optional — can also fetch above or add later from documents)</label>
           <textarea
             style={{ ...inputStyle, minHeight: 70, resize: "vertical" }}
             value={toneProfile}
@@ -146,7 +238,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
               opacity: saving ? 0.7 : 1,
             }}
           >
-            {saving ? "Adding…" : "Add client"}
+            {saving ? "Adding…" : "Continue"}
           </button>
         </div>
       </form>

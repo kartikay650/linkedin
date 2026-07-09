@@ -5,15 +5,20 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.alerts import send_alert
 from app.config import settings
 from app.db import get_db
 from app.docs.extract import extract_text
 from app.docs.youtube import TranscriptUnavailable, extract_youtube_transcript
 from app.jobs.discovery import run_discovery_for_client
+from app.jobs.health_check import redistribute_clients
 from app.llm.tone_synthesis import synthesize_tone_profile
-from app.models import Burner, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
+from app.models import Burner, BurnerStatus, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
+from app.scraper.profile_info import fetch_profile_summary
+from app.scraper.rate_limit import DailyCapReached, check_and_reserve_action
+from app.scraper.session import CheckpointDetected, burner_page
 from app.schemas import (
-    ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ProspectOut,
+    ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ProfilePreviewOut, ProfilePreviewRequest, ProspectOut,
     ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
 )
 
@@ -25,6 +30,35 @@ ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt"}
 @router.get("", response_model=list[ClientOut])
 def list_clients(db: Session = Depends(get_db)):
     return db.query(Client).all()
+
+
+@router.post("/fetch-profile-preview", response_model=ProfilePreviewOut)
+def fetch_profile_preview(payload: ProfilePreviewRequest, db: Session = Depends(get_db)):
+    """One-off scrape of a prospective client's own LinkedIn profile (name/headline/
+    about) to prefill the add-client form. Never saved directly — the human reviews
+    and can edit everything before the client is actually created."""
+    burner = db.get(Burner, payload.burner_id)
+    if not burner:
+        raise HTTPException(404, "burner not found")
+
+    try:
+        check_and_reserve_action(db, burner)
+    except DailyCapReached as e:
+        raise HTTPException(429, str(e))
+
+    try:
+        with burner_page(burner) as page:
+            summary = fetch_profile_summary(page, payload.linkedin_url)
+    except CheckpointDetected as e:
+        burner.status = BurnerStatus.needs_relogin
+        db.commit()
+        send_alert(f":warning: Burner '{burner.label}' checkpointed fetching profile preview for {payload.linkedin_url}: {e}")
+        redistribute_clients(db, burner)
+        raise HTTPException(502, "this burner just got checkpointed — try again once it's re-logged-in")
+    except Exception as e:
+        raise HTTPException(502, f"couldn't fetch that profile: {e}")
+
+    return ProfilePreviewOut(**summary)
 
 
 @router.post("", response_model=ClientOut)
