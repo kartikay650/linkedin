@@ -1,24 +1,22 @@
 import os
-import uuid
+import tempfile
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.alerts import send_alert
 from app.config import settings
 from app.db import get_db
 from app.docs.extract import extract_text
+from app.docs.storage import store_document, delete_document as delete_stored_document
 from app.docs.youtube import TranscriptUnavailable, extract_youtube_transcript
-from app.jobs.discovery import run_discovery_for_client
-from app.jobs.health_check import redistribute_clients
+from app.jobs.discovery import run_discovery_for_client, start_discovery_for_client
+from app.llm.brand_profile import extract_brand_profile
 from app.llm.tone_synthesis import synthesize_tone_profile
-from app.models import Burner, BurnerStatus, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
-from app.scraper.profile_info import fetch_profile_summary
-from app.scraper.rate_limit import DailyCapReached, check_and_reserve_action
-from app.scraper.session import CheckpointDetected, burner_page
+from app.scraper.linkedin_lookup import resolve_creators
+from app.models import Burner, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
 from app.schemas import (
-    ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ProfilePreviewOut, ProfilePreviewRequest, ProspectOut,
+    BrandProfileOut, ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ProspectOut,
     ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
 )
 
@@ -30,35 +28,6 @@ ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt"}
 @router.get("", response_model=list[ClientOut])
 def list_clients(db: Session = Depends(get_db)):
     return db.query(Client).all()
-
-
-@router.post("/fetch-profile-preview", response_model=ProfilePreviewOut)
-def fetch_profile_preview(payload: ProfilePreviewRequest, db: Session = Depends(get_db)):
-    """One-off scrape of a prospective client's own LinkedIn profile (name/headline/
-    about) to prefill the add-client form. Never saved directly — the human reviews
-    and can edit everything before the client is actually created."""
-    burner = db.get(Burner, payload.burner_id)
-    if not burner:
-        raise HTTPException(404, "burner not found")
-
-    try:
-        check_and_reserve_action(db, burner)
-    except DailyCapReached as e:
-        raise HTTPException(429, str(e))
-
-    try:
-        with burner_page(burner) as page:
-            summary = fetch_profile_summary(page, payload.linkedin_url)
-    except CheckpointDetected as e:
-        burner.status = BurnerStatus.needs_relogin
-        db.commit()
-        send_alert(f":warning: Burner '{burner.label}' checkpointed fetching profile preview for {payload.linkedin_url}: {e}")
-        redistribute_clients(db, burner)
-        raise HTTPException(502, "this burner just got checkpointed — try again once it's re-logged-in")
-    except Exception as e:
-        raise HTTPException(502, f"couldn't fetch that profile: {e}")
-
-    return ProfilePreviewOut(**summary)
 
 
 @router.post("", response_model=ClientOut)
@@ -146,29 +115,31 @@ def upload_document(client_id: int, file: UploadFile, db: Session = Depends(get_
     if len(contents) > settings.max_upload_size_mb * 1024 * 1024:
         raise HTTPException(400, f"file exceeds {settings.max_upload_size_mb}MB limit")
 
-    client_dir = os.path.join(settings.client_docs_dir, str(client_id))
-    os.makedirs(client_dir, exist_ok=True)
-    storage_path = os.path.join(client_dir, f"{uuid.uuid4().hex}_{file.filename}")
-    with open(storage_path, "wb") as f:
-        f.write(contents)
+    # Extract text from a temp file (works on serverless, where /tmp is the only
+    # writable path), then persist the original to Supabase Storage or local disk.
+    extracted, status, error = "", DocumentStatus.done, ""
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
+        tf.write(contents)
+        tmp_path = tf.name
+    try:
+        extracted = extract_text(tmp_path)
+    except Exception as e:
+        status, error = DocumentStatus.failed, str(e)
+    finally:
+        os.remove(tmp_path)
+
+    storage_path = store_document(client_id, file.filename or "upload", contents)
 
     doc = ClientDocument(
         client_id=client_id,
         source_type=DocumentSource.upload,
         original_filename=file.filename,
         storage_path=storage_path,
-        status=DocumentStatus.processing,
+        extracted_text=extracted,
+        status=status,
+        error_detail=error,
     )
     db.add(doc)
-    db.commit()
-    db.refresh(doc)
-
-    try:
-        doc.extracted_text = extract_text(storage_path)
-        doc.status = DocumentStatus.done
-    except Exception as e:
-        doc.status = DocumentStatus.failed
-        doc.error_detail = str(e)
     db.commit()
     db.refresh(doc)
     return doc
@@ -205,8 +176,7 @@ def delete_document(client_id: int, doc_id: int, db: Session = Depends(get_db)):
     doc = db.get(ClientDocument, doc_id)
     if not doc or doc.client_id != client_id:
         raise HTTPException(404, "document not found")
-    if doc.storage_path and os.path.exists(doc.storage_path):
-        os.remove(doc.storage_path)
+    delete_stored_document(doc.storage_path)
     db.delete(doc)
     db.commit()
     return {"ok": True}
@@ -228,6 +198,35 @@ def tone_synthesis(client_id: int, db: Session = Depends(get_db)):
 
     proposed = synthesize_tone_profile(client, documents)
     return ToneSynthesisOut(proposed_tone_profile=proposed, source_document_ids=[d.id for d in documents])
+
+
+@router.post("/{client_id}/extract-brand-profile", response_model=BrandProfileOut)
+def extract_brand_profile_route(client_id: int, db: Session = Depends(get_db)):
+    """Extract a structured brand profile (voice, viewpoints, audience, key messages,
+    CTA rules, guardrails, topics, suggested creators) from the client's processed
+    documents. Never saves — the human reviews/edits each section and PATCHes the
+    client to apply. Same human-review gate as tone synthesis and draft replies."""
+    client = db.get(Client, client_id)
+    if not client:
+        raise HTTPException(404, "client not found")
+
+    documents = db.query(ClientDocument).filter(
+        ClientDocument.client_id == client_id, ClientDocument.status == DocumentStatus.done
+    ).all()
+    if not documents:
+        raise HTTPException(400, "no successfully-processed documents to extract from")
+
+    profile = extract_brand_profile(client, documents)
+    if not profile:
+        raise HTTPException(502, "couldn't extract a brand profile from the documents")
+
+    # Auto-resolve each suggested creator's LinkedIn URL (best-effort; a human
+    # still confirms before tracking). Context = the client's field, to reduce
+    # same-name false matches.
+    if profile.get("suggested_creators"):
+        profile["suggested_creators"] = resolve_creators(profile["suggested_creators"], client.specialty or "")
+
+    return BrandProfileOut(**profile, source_document_ids=[d.id for d in documents])
 
 
 @router.get("/{client_id}/prospects", response_model=list[ProspectOut])
@@ -279,15 +278,17 @@ def reject_prospect(client_id: int, prospect_id: int, db: Session = Depends(get_
 
 @router.post("/{client_id}/sync")
 def sync_client(client_id: int, db: Session = Depends(get_db)):
-    """Manually trigger discovery for this client right now. Runs synchronously —
-    deliberately paced (rate-limited delays between each watch-creator), so this
-    can take a few minutes for clients with several creators. That pacing is a
-    safety feature, not a bug."""
+    """Trigger discovery for this client. In webhook mode (serverless) it fires the
+    Apify runs and returns immediately — posts arrive shortly via /apify/webhook. In
+    polling mode (local) it fetches synchronously and returns the new-post count."""
     client = db.get(Client, client_id)
     if not client:
         raise HTTPException(404, "client not found")
 
     try:
+        if settings.apify_use_webhooks and settings.public_base_url:
+            started = start_discovery_for_client(db, client)
+            return {"status": "started", "runs": started}
         new_posts = run_discovery_for_client(db, client)
     except RuntimeError as e:
         raise HTTPException(400, str(e))

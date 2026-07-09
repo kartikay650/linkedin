@@ -23,8 +23,6 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const [topics, setTopics] = useState("");
   const [burnerId, setBurnerId] = useState("");
   const [burners, setBurners] = useState([]);
-  const [fetching, setFetching] = useState(false);
-  const [fetchNote, setFetchNote] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [createdClient, setCreatedClient] = useState(null);
@@ -44,7 +42,6 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     setLinkedinUrl("");
     setToneProfile("");
     setTopics("");
-    setFetchNote(null);
     setError(null);
     setCreatedClient(null);
   };
@@ -52,25 +49,6 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const handleClose = () => {
     reset();
     onClose();
-  };
-
-  const handleFetchFromLinkedin = async () => {
-    if (!linkedinUrl.trim() || !burnerId) return;
-    setFetching(true);
-    setFetchNote(null);
-    setError(null);
-    try {
-      const preview = await api.fetchProfilePreview(linkedinUrl.trim(), Number(burnerId));
-      if (preview.name) setName(preview.name);
-      if (preview.headline) setSpecialty(preview.headline);
-      if (preview.about) setToneProfile(preview.about);
-      setFetchNote("Pulled from LinkedIn — review and edit anything before saving.");
-    } catch (err) {
-      setFetchNote(null);
-      setError(err.message);
-    } finally {
-      setFetching(false);
-    }
   };
 
   const handleCreateDetails = async (e) => {
@@ -138,31 +116,12 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       <form onSubmit={handleCreateDetails} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div>
           <label style={labelStyle}>Client's LinkedIn profile</label>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input
-              style={inputStyle}
-              value={linkedinUrl}
-              onChange={(e) => setLinkedinUrl(e.target.value)}
-              placeholder="https://www.linkedin.com/in/..."
-            />
-            <button
-              type="button"
-              onClick={handleFetchFromLinkedin}
-              disabled={fetching || !linkedinUrl.trim() || !burnerId}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 8,
-                border: "1px solid var(--border)",
-                background: "var(--surface)",
-                fontSize: 12,
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {fetching ? "Fetching…" : "Fetch details"}
-            </button>
-          </div>
-          {fetchNote && <div style={{ fontSize: 12, color: "var(--success)", marginTop: 4 }}>{fetchNote}</div>}
+          <input
+            style={inputStyle}
+            value={linkedinUrl}
+            onChange={(e) => setLinkedinUrl(e.target.value)}
+            placeholder="https://www.linkedin.com/in/..."
+          />
         </div>
         <div>
           <label style={labelStyle}>Name</label>

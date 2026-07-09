@@ -1,4 +1,6 @@
 .env
+deploy/deploy.env
+.vercel/
 sessions/
 client_docs/
 node_modules/

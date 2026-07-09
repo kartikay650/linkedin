@@ -1,88 +1,74 @@
+"""Post discovery via Apify. Two modes:
+
+- Polling (local/dev, apify_use_webhooks=False): start each creator's actor run,
+  wait for it, save posts synchronously. Fine on an always-on process; would time
+  out on serverless.
+- Webhook (deployed/serverless, apify_use_webhooks=True): fire each creator's run
+  with a callback and return immediately. Apify calls /apify/webhook when the run
+  finishes; that handler saves the posts. Nothing stays open for minutes.
+
+The browser/burner path is gone — Apify is the only provider now.
+"""
+import json
+
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.alerts import send_alert
+from app.config import settings
 from app.llm.relevance import score_post
-from app.models import Burner, BurnerStatus, Client, Post
-from app.scraper.creator_feed import fetch_recent_posts
-from app.scraper.rate_limit import DailyCapReached, check_and_reserve_action, human_delay
-from app.scraper.session import CheckpointDetected, burner_page
-from app.jobs.health_check import redistribute_clients
-
-# Keyword/topic search is intentionally NOT used here. LinkedIn checkpoints the
-# whole session when automation touches /search/results/content/, which then
-# blocks every other page too — including the watch-creator path below, which
-# is otherwise reliable. Discovery is watch-list-only until that's solved.
-#
-# Each creator gets its OWN fresh browser session (a separate burner_page call),
-# rather than one shared session hopping between several strangers' profiles.
-# One session visiting many different profiles back-to-back is a stronger bot
-# signal than several independent, freshly-launched sessions each visiting one —
-# confirmed empirically: a shared-session batch degraded progressively (later
-# creators failed more than earlier ones, ending in a hard checkpoint), while
-# isolated single-creator sessions succeeded reliably.
-
-
-def run_discovery_for_burner(db: Session, burner: Burner) -> None:
-    if burner.status != BurnerStatus.active:
-        return
-
-    clients = db.query(Client).filter(Client.burner_id == burner.id).all()
-    for client in clients:
-        if burner.status != BurnerStatus.active:
-            break
-        _discover_for_client(db, burner, client)
+from app.models import Client, Post
+from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
 
 
 def run_discovery_for_client(db: Session, client: Client) -> int:
-    """Manual, on-demand sync for a single client (dashboard "Sync now" button).
-    Returns the number of new posts found. Raises if the client has no active burner."""
-    burner = client.burner
-    if not burner or burner.status != BurnerStatus.active:
-        raise RuntimeError("this client has no active burner assigned")
-
+    """Polling mode: fetch each watch-creator's posts now and save them.
+    Returns the number of new posts. Used when apify_use_webhooks is off."""
     before = db.query(Post).filter(Post.client_id == client.id).count()
-    _discover_for_client(db, burner, client)
+    for creator in client.watch_creators:
+        try:
+            posts = apify_fetch_posts(creator.profile_url, max_results=3)
+        except ApifyError as e:
+            print(f"[apify] {creator.label or creator.profile_url}: {e}")
+            continue
+        for raw in posts:
+            raw["author_name"] = raw["author_name"] or creator.label
+            _save_and_process(db, client, creator.profile_url, raw)
     after = db.query(Post).filter(Post.client_id == client.id).count()
     return after - before
 
 
-def _discover_for_client(db: Session, burner: Burner, client: Client) -> None:
+def start_discovery_for_client(db: Session, client: Client) -> int:
+    """Webhook mode: start one actor run per watch-creator with a callback, and
+    return how many were started. Posts arrive later via /apify/webhook."""
+    started = 0
     for creator in client.watch_creators:
-        if burner.status != BurnerStatus.active:
-            return
-
+        payload = _build_input(creator.profile_url, 3)
+        webhook = _build_webhook(client.id, creator.label or "", creator.profile_url)
         try:
-            check_and_reserve_action(db, burner)
-        except DailyCapReached:
-            return
-
-        try:
-            with burner_page(burner) as page:
-                posts = fetch_recent_posts(page, creator.profile_url, max_results=3)
-        except CheckpointDetected as e:
-            burner.status = BurnerStatus.needs_relogin
-            db.commit()
-            send_alert(f":warning: Burner '{burner.label}' checkpointed on {creator.label or creator.profile_url}: {e}")
-            redistribute_clients(db, burner)
-            return
-        except Exception:
-            # One creator's page misbehaving (timeout, anonymous render, layout quirk)
-            # shouldn't sink the rest of the batch — skip it and keep going.
-            human_delay()
-            continue
-
-        for raw in posts:
-            raw["author_name"] = raw["author_name"] or creator.label
-            _save_and_process(db, client, burner, creator.profile_url, raw)
-
-        human_delay()
+            start_actor(settings.apify_actor_id, payload, webhook=webhook)
+            started += 1
+        except ApifyError as e:
+            print(f"[apify] couldn't start run for {creator.label or creator.profile_url}: {e}")
+    return started
 
 
-def _save_and_process(db: Session, client: Client, burner: Burner, source_ref: str, raw: dict) -> None:
+def _build_webhook(client_id: int, creator_label: str, source_ref: str) -> dict:
+    # payloadTemplate is JSON-with-placeholders: our own fields (baked in now) plus
+    # Apify's {{resource}} (the finished run object, which carries defaultDatasetId).
+    literal = json.dumps({"client_id": client_id, "creator_label": creator_label, "source_ref": source_ref})
+    template = literal[:-1] + ', "resource": {{resource}}}'
+    base = settings.public_base_url.rstrip("/")
+    return {
+        "eventTypes": ["ACTOR.RUN.SUCCEEDED"],
+        "requestUrl": f"{base}/apify/webhook?secret={settings.apify_webhook_secret}",
+        "payloadTemplate": template,
+    }
+
+
+def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -> None:
     post = Post(
         client_id=client.id,
-        burner_id=burner.id,
+        burner_id=None,  # burners retired; Apify has no per-account attribution
         source_type="creator",
         source_ref=source_ref,
         author_name=raw["author_name"],
@@ -99,9 +85,8 @@ def _save_and_process(db: Session, client: Client, burner: Burner, source_ref: s
         db.rollback()  # already seen this post_url — dedup via the unique constraint
         return
 
-    # Relevance is scored automatically so the human has a hint to sort/filter by —
-    # but the reply text itself is never generated until a person clicks "Draft reply"
-    # on this specific post. No auto-drafting here.
+    # Relevance is scored so the human can sort/filter; the reply text itself is
+    # never generated until a person clicks "Draft reply". No auto-drafting here.
     score, reason = score_post(client, post)
     post.relevance_score = score
     post.relevance_reason = reason

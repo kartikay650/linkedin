@@ -54,6 +54,16 @@ class Client(Base):
     tone_profile = Column(Text, default="")  # short doc: voice, do's/don'ts, sample phrases
     topics = Column(JSON, default=list)  # keywords/hashtags to search
     burner_id = Column(Integer, ForeignKey("burners.id"), nullable=True)
+
+    # Structured brand profile, synthesised from the client's strategy doc(s) and
+    # human-reviewed. Feeds the relevance scorer and the reply drafter. All free
+    # text so a person can edit each section directly (human-in-the-loop).
+    voice_guide = Column(Text, default="")        # how they write: tone, style, do's/don'ts
+    viewpoints = Column(Text, default="")          # their actual opinions/stances on topics
+    audience = Column(Text, default="")            # who they're reaching + that audience's pain points
+    key_messages = Column(Text, default="")        # core positioning statements / proof points
+    cta_rules = Column(Text, default="")           # how/when to point to resources; what NOT to push
+    guardrails = Column(Text, default="")          # hard rules the drafter must never violate
     created_at = Column(DateTime, server_default=func.now())
 
     burner = relationship("Burner", back_populates="clients")
@@ -114,7 +124,14 @@ class Burner(Base):
     label = Column(String, nullable=False)
     status = Column(Enum(BurnerStatus), default=BurnerStatus.active)
     storage_state_path = Column(String, nullable=False)  # path to persisted cookies/session
+    # Optional explicit per-burner proxy override. Normally left NULL — the proxy
+    # is derived from settings.proxy_url_template + proxy_session_id (see scraper/proxy.py).
     proxy_url = Column(String, nullable=True)  # e.g. http://user:pass@proxy.packetstream.io:31112
+    # Stable sticky-session id → this burner always gets the SAME residential exit IP.
+    proxy_session_id = Column(String, nullable=True)
+    # Fingerprint knobs pinned per burner; should track the proxy's country.
+    locale = Column(String, nullable=True)  # e.g. "en-US"; NULL → default
+    timezone_id = Column(String, nullable=True)  # e.g. "America/New_York"; NULL → default
     last_health_check_at = Column(DateTime, nullable=True)
     last_health_ok = Column(Boolean, default=True)
     actions_today = Column(Integer, default=0)

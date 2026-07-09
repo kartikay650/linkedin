@@ -11,15 +11,27 @@ PROMPT = """You score whether a LinkedIn post is worth this client commenting on
 Client specialty: {specialty}
 Client topics of interest: {topics}
 
+Who the client is trying to reach (their audience and that audience's pain points):
+\"\"\"
+{audience}
+\"\"\"
+
+The client's own stances/opinions in this field (a comment is high-value when the client can add one of
+these specific viewpoints to the conversation):
+\"\"\"
+{viewpoints}
+\"\"\"
+
 Post author: {author}
 Post content:
 \"\"\"
 {content}
 \"\"\"
 
-Score relevance from 0.0 to 1.0: does this post genuinely fit the client's expertise/audience,
-is it recent/active enough that a comment would still get seen, and does it have real substance
-(not generic filler) worth engaging with. Respond ONLY with JSON: {{"score": float, "reason": "one sentence"}}"""
+Score relevance from 0.0 to 1.0. Reward posts where (a) the topic genuinely fits the client's expertise,
+(b) the client could add value FOR THE AUDIENCE above — not just react generically, and (c) the client has
+a specific viewpoint that would make the comment substantive. Penalise generic filler and posts where a
+comment would just be polite noise. Respond ONLY with JSON: {{"score": float, "reason": "one sentence"}}"""
 
 
 def score_post(client: Client, post: Post) -> tuple[float, str]:
@@ -31,6 +43,8 @@ def score_post(client: Client, post: Post) -> tuple[float, str]:
             "content": PROMPT.format(
                 specialty=client.specialty,
                 topics=", ".join(client.topics or []),
+                audience=(client.audience or "").strip() or "(not specified)",
+                viewpoints=(client.viewpoints or "").strip() or "(not specified)",
                 author=post.author_name,
                 content=post.content_snippet,
             ),

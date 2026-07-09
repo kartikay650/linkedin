@@ -3,6 +3,7 @@ import Modal from "./Modal";
 import Badge from "./Badge";
 import EmptyState from "./EmptyState";
 import ToneDocumentsSection from "./ToneDocumentsSection";
+import BrandProfileSection from "./BrandProfileSection";
 import { api } from "../api";
 import { sectionStyle, sectionTitleStyle, smallButtonStyle, inputStyle } from "./modalStyles";
 
@@ -14,6 +15,7 @@ export default function ManageClientModal({ open, onClose, client, onUpdated }) 
       <WatchCreatorsSection client={client} />
       <ProspectsSection client={client} />
       <ToneDocumentsSection client={client} onUpdated={onUpdated} />
+      <BrandProfileSection client={client} onUpdated={onUpdated} />
     </Modal>
   );
 }

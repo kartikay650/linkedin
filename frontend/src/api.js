@@ -26,11 +26,6 @@ async function requestForm(path, formData) {
 export const api = {
   listClients: () => request("/clients"),
   listBurners: () => request("/burners"),
-  fetchProfilePreview: (linkedinUrl, burnerId) =>
-    request("/clients/fetch-profile-preview", {
-      method: "POST",
-      body: JSON.stringify({ linkedin_url: linkedinUrl, burner_id: burnerId }),
-    }),
   createClient: (payload) => request("/clients", { method: "POST", body: JSON.stringify(payload) }),
   updateClient: (clientId, payload) =>
     request(`/clients/${clientId}`, { method: "PATCH", body: JSON.stringify(payload) }),
@@ -57,6 +52,7 @@ export const api = {
   deleteDocument: (clientId, docId) =>
     request(`/clients/${clientId}/documents/${docId}`, { method: "DELETE" }),
   synthesizeTone: (clientId) => request(`/clients/${clientId}/tone-synthesis`, { method: "POST" }),
+  extractBrandProfile: (clientId) => request(`/clients/${clientId}/extract-brand-profile`, { method: "POST" }),
 
   listProspects: (clientId) => request(`/clients/${clientId}/prospects`),
   discoverProspects: (clientId) => request(`/clients/${clientId}/prospects/discover`, { method: "POST" }),

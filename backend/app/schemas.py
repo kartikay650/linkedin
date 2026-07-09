@@ -12,6 +12,12 @@ class ClientOut(BaseModel):
     tone_profile: str
     topics: list[str]
     burner_id: Optional[int]
+    voice_guide: Optional[str] = None
+    viewpoints: Optional[str] = None
+    audience: Optional[str] = None
+    key_messages: Optional[str] = None
+    cta_rules: Optional[str] = None
+    guardrails: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -33,6 +39,33 @@ class ClientUpdate(BaseModel):
     tone_profile: Optional[str] = None
     topics: Optional[list[str]] = None
     burner_id: Optional[int] = None
+    voice_guide: Optional[str] = None
+    viewpoints: Optional[str] = None
+    audience: Optional[str] = None
+    key_messages: Optional[str] = None
+    cta_rules: Optional[str] = None
+    guardrails: Optional[str] = None
+
+
+class SuggestedCreator(BaseModel):
+    name: str
+    profile_url: str = ""   # auto-resolved from the name during onboarding; human confirms
+    reason: str = ""
+    verified: bool = False  # true if the resolved URL's search result matched the name
+
+
+class BrandProfileOut(BaseModel):
+    """Proposed brand profile extracted from a client's strategy doc(s). Never
+    persisted directly — a human reviews/edits each section, then PATCHes the client."""
+    voice_guide: str = ""
+    viewpoints: str = ""
+    audience: str = ""
+    key_messages: str = ""
+    cta_rules: str = ""
+    guardrails: str = ""
+    topics: list[str] = []
+    suggested_creators: list[SuggestedCreator] = []
+    source_document_ids: list[int] = []
 
 
 class ProfilePreviewRequest(BaseModel):

@@ -9,32 +9,30 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-
   backend:
     build: ./backend
     restart: unless-stopped
     env_file: .env
     depends_on:
       - postgres
-      - redis
     volumes:
-      - ./sessions:/app/sessions
       - ./client_docs:/app/client_docs
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-  scheduler:
-    build: ./backend
-    restart: unless-stopped
-    env_file: .env
-    depends_on:
-      - postgres
-      - redis
-    volumes:
-      - ./sessions:/app/sessions
-    command: python -m app.jobs.scheduler
+  # Automatic discovery is DISABLED — syncing is manual-only (dashboard "Sync now").
+  # The scheduler was built for the per-burner model and predates the Apify switch;
+  # re-enable (and adapt jobs/scheduler.py to iterate clients, not burners) only if
+  # automatic syncing is wanted later.
+  # scheduler:
+  #   build: ./backend
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #   volumes:
+  #     - ./sessions:/app/sessions
+  #   command: python -m app.jobs.scheduler
 
   frontend:
     build:
