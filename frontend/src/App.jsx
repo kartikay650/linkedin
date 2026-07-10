@@ -1,5 +1,10 @@
 import Dashboard from "./pages/Dashboard.jsx";
+import AuthGate from "./AuthGate.jsx";
 
 export default function App() {
-  return <Dashboard />;
+  return (
+    <AuthGate>
+      <Dashboard />
+    </AuthGate>
+  );
 }

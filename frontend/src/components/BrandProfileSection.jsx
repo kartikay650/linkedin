@@ -50,8 +50,21 @@ export default function BrandProfileSection({ client, onUpdated }) {
       FIELDS.forEach(([key]) => (next[key] = p[key] || ""));
       setFields(next);
       setTopics((p.topics || []).join(", "));
-      setSuggested(p.suggested_creators || []);
+      const creators = (p.suggested_creators || []).map((c) => ({ ...c, resolving: true }));
+      setSuggested(creators);
       setSaved(false);
+      // Resolve each creator's LinkedIn URL in its own request (kept separate from
+      // the extraction so no single call approaches the serverless time limit).
+      creators.forEach(async (c, idx) => {
+        try {
+          const r = await api.resolveCreator(client.id, c.name);
+          setSuggested((list) =>
+            list.map((x, i) => (i === idx ? { ...x, profile_url: r.profile_url, verified: r.verified, resolving: false } : x))
+          );
+        } catch {
+          setSuggested((list) => list.map((x, i) => (i === idx ? { ...x, resolving: false } : x)));
+        }
+      });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -161,7 +174,9 @@ export default function BrandProfileSection({ client, onUpdated }) {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</span>
-                {c.profile_url?.trim() && (
+                {c.resolving ? (
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>resolving link…</span>
+                ) : c.profile_url?.trim() ? (
                   <span
                     style={{
                       fontSize: 10,
@@ -174,6 +189,8 @@ export default function BrandProfileSection({ client, onUpdated }) {
                   >
                     {c.verified ? "✓ verified" : "unverified — check"}
                   </span>
+                ) : (
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>no link found — paste manually</span>
                 )}
               </div>
               {c.reason && <div style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 6px" }}>{c.reason}</div>}

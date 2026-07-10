@@ -1,26 +1,44 @@
+import { supabase } from "./supabase";
+
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-async function request(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+// Attach the current Supabase session token to every API call.
+async function authHeader() {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function handle(res, path, method) {
+  if (res.status === 401) {
+    await supabase.auth.signOut(); // session expired — bounce back to login
+    throw new Error("Your session expired — please sign in again.");
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(body?.detail || `${options.method || "GET"} ${path} failed: ${res.status}`);
+    throw new Error(body?.detail || `${method || "GET"} ${path} failed: ${res.status}`);
   }
   return res.json();
+}
+
+async function request(path, options = {}) {
+  const { headers: optHeaders, ...rest } = options;
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: { "Content-Type": "application/json", ...(await authHeader()), ...optHeaders },
+    ...rest,
+  });
+  return handle(res, path, options.method);
 }
 
 // Multipart uploads must NOT set Content-Type manually — the browser needs to
 // generate the boundary itself, which it can only do if fetch sets the header.
 async function requestForm(path, formData) {
-  const res = await fetch(`${BASE_URL}${path}`, { method: "POST", body: formData });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.detail || `POST ${path} failed: ${res.status}`);
-  }
-  return res.json();
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    headers: { ...(await authHeader()) },
+    body: formData,
+  });
+  return handle(res, path, "POST");
 }
 
 export const api = {
@@ -53,6 +71,8 @@ export const api = {
     request(`/clients/${clientId}/documents/${docId}`, { method: "DELETE" }),
   synthesizeTone: (clientId) => request(`/clients/${clientId}/tone-synthesis`, { method: "POST" }),
   extractBrandProfile: (clientId) => request(`/clients/${clientId}/extract-brand-profile`, { method: "POST" }),
+  resolveCreator: (clientId, name) =>
+    request(`/clients/${clientId}/resolve-creator`, { method: "POST", body: JSON.stringify({ name }) }),
 
   listProspects: (clientId) => request(`/clients/${clientId}/prospects`),
   discoverProspects: (clientId) => request(`/clients/${clientId}/prospects/discover`, { method: "POST" }),
