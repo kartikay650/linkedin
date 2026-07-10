@@ -1,63 +1,44 @@
-# Deploy: Supabase + Vercel (serverless, burner-free)
+# Deployment (live)
 
-The app is now burner-free — the backend is a stateless HTTP service that calls
-Apify + Anthropic + Postgres. No browser, no VM, no Docker required. Target stack:
+Serverless, burner-free, no Docker. Runs on Vercel + Supabase.
 
-- **Frontend (Vite SPA) → Vercel**
-- **API (FastAPI) → Vercel serverless functions**
-- **Postgres → Supabase**
-- **Uploaded client docs → Supabase Storage** (serverless disk is ephemeral)
-- **Apify → webhook-driven** (no polling; nothing stays open for minutes)
+## Live URLs
+- **Dashboard (frontend):** https://linkedin-dashboard-silk.vercel.app
+- **API (backend):** https://linkedin-api-green.vercel.app
+- **Repo:** https://github.com/kartikay650/linkedin (branch `main`)
 
-## Already done (in code, verified locally)
+## What's where
+| Piece | Service | Notes |
+|---|---|---|
+| Frontend (Vite SPA) | Vercel project `linkedin-dashboard` | root dir `frontend/`, env `VITE_API_URL` → the API URL |
+| API (FastAPI) | Vercel project `linkedin-api` | root dir `backend/`, ASGI via `backend/api/index.py` |
+| Postgres + Storage | Supabase project `linkedin-engagement` | separate account/org from beetle; bucket `client-docs` |
+| Post fetching | Apify (HarvestAPI actor), webhook-driven | `/apify/webhook` receives run-finished callbacks |
 
-- Webhook mode: `POST /clients/{id}/sync` fires Apify runs and returns immediately;
-  Apify calls `POST /apify/webhook?secret=...` when a run finishes, and that handler
-  saves + scores the posts. Toggle with env: `APIFY_USE_WEBHOOKS=true` +
-  `PUBLIC_BASE_URL` + `APIFY_WEBHOOK_SECRET`.
-- Active import graph is browser-free; Redis removed.
+Deploys happen automatically on push to `main` (both projects are git-linked). Env
+vars live in each Vercel project's Settings → Environment Variables (never in git).
 
-## Remaining code changes before Vercel (need your accounts to test)
+## Running migrations (no Docker)
+Schema changes go through Alembic against Supabase's **session pooler** (port 5432,
+IPv4). From a machine with the backend deps installed:
 
-1. **Document uploads → Supabase Storage.** `upload_document` currently writes to a
-   local `client_docs/` volume; Vercel has no persistent disk. Switch to a storage
-   bucket (dual-mode: local disk when `SUPABASE_URL` unset, Supabase Storage when set).
-2. **DB engine for serverless.** Use Supabase's **connection pooler** URL (port 6543,
-   pgBouncer) as `DATABASE_URL`, and `poolclass=NullPool` in `db.py` so functions
-   don't exhaust connections.
-3. **Vercel entrypoint.** Add `api/index.py` exposing the ASGI `app` and a `vercel.json`
-   routing all paths to it. Set function `maxDuration` to ~60s (extract/resolve is the
-   longest sync call; sync itself is now instant via webhooks).
-4. **Migrations out-of-band.** Don't run Alembic on startup in serverless. Run
-   `alembic upgrade head` once against the Supabase URL from your machine/CI on deploy.
+```bash
+cd backend
+python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+# session-pooler URL (5432), password from deploy/provision.env:
+export DATABASE_URL="postgresql://postgres.<ref>:<db-pass>@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+python -m alembic upgrade head
+```
+The app itself uses the **transaction pooler** (port 6543) via the `DATABASE_URL`
+env var on Vercel. Initial schema was created with `Base.metadata.create_all` +
+`alembic stamp head` (the Alembic baseline is a no-op from the pre-Alembic era).
 
-## Setup steps
+## Local secrets (gitignored)
+- `deploy/deploy.env` — GitHub/Supabase/Vercel tokens
+- `deploy/provision.env` — created project ref, DB password, service key, webhook secret
 
-### Supabase
-1. Create a project. Copy the **pooler** connection string (Settings → Database →
-   Connection pooling, "Transaction" mode, port 6543).
-2. `DATABASE_URL=<pooler-url>` locally, then `alembic upgrade head` to create the schema.
-3. Create a Storage bucket `client-docs` (private). Copy the project URL + service key.
-
-### Vercel — API project
-- Root = `backend/`. Env: `DATABASE_URL` (pooler), `ANTHROPIC_API_KEY`, `APIFY_TOKEN`,
-  `APIFY_ACTOR_ID`, `APIFY_INPUT_JSON`, `APIFY_USE_WEBHOOKS=true`,
-  `APIFY_WEBHOOK_SECRET` (a real secret, not the test one), `SUPABASE_URL`,
-  `SUPABASE_SERVICE_KEY`, and `PUBLIC_BASE_URL` = this project's deployed URL.
-- Deploy, note the URL, set `PUBLIC_BASE_URL` to it, redeploy.
-
-### Vercel — frontend project
-- Root = `frontend/`. Build `npm run build`, output `dist`. Env `VITE_API_URL` =
-  the API project's URL (or a rewrite to it). Add Vercel password protection (or wire
-  Supabase Auth) to replace the Caddy basic-auth.
-
-### Verify end-to-end (only possible once deployed — Apify can't call localhost)
-1. Add a client, upload a strategy doc (confirm it lands in Supabase Storage).
-2. Extract brand profile; Track verified creators.
-3. Hit **Sync now** → returns `{"status":"started"}` instantly. Within ~1-2 min,
-   posts appear (Apify called `/apify/webhook`). Check the Apify console's webhook
-   deliveries if not.
-
-## Cost
-Supabase free + Vercel free/hobby + Apify ~$5/mo + Anthropic usage ≈ **~$10/mo**, zero
-servers to babysit.
+## ⚠ Open item: authentication
+The dashboard and API are currently **public** (the old Caddy basic-auth went away
+with Docker). Before real client data goes in, lock it down — Vercel Deployment
+Protection (password, needs Pro) on both projects, or wire Supabase Auth into the
+SPA + an auth check on the API. See the note in the handoff.
