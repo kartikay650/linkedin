@@ -2,7 +2,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth import require_user
-from app.routers import accounts, clients, posts, webhooks
+from app.routers import clients, posts, webhooks
 
 app = FastAPI(title="LinkedIn Engagement Dashboard API")
 
@@ -18,7 +18,6 @@ app.add_middleware(
 # not a CORS error). The webhook router is excluded — it uses its own shared secret.
 _auth = [Depends(require_user)]
 app.include_router(clients.router, dependencies=_auth)
-app.include_router(accounts.router, dependencies=_auth)
 app.include_router(posts.router, dependencies=_auth)
 app.include_router(webhooks.router)
 

@@ -13,11 +13,12 @@ from app.docs.youtube import TranscriptUnavailable, extract_youtube_transcript
 from app.jobs.discovery import run_discovery_for_client, start_discovery_for_client
 from app.llm.brand_profile import extract_brand_profile
 from app.llm.tone_synthesis import synthesize_tone_profile
-from app.scraper.linkedin_lookup import resolve_creator_url
-from app.models import Burner, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
+from app.scraper.linkedin_lookup import resolve_creator_url, resolve_creators
+from app.models import Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
 from app.schemas import (
     BrandProfileOut, ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ExtractBrandRequest,
-    ProspectOut, ResolveCreatorRequest, ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
+    ProspectOut, ResolveCreatorRequest, ToneSynthesisOut, TrackCreatorsRequest, WatchCreatorCreate,
+    WatchCreatorOut, YoutubeDocumentCreate,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -32,9 +33,6 @@ def list_clients(db: Session = Depends(get_db)):
 
 @router.post("", response_model=ClientOut)
 def create_client(payload: ClientCreate, db: Session = Depends(get_db)):
-    if payload.burner_id is not None and not db.get(Burner, payload.burner_id):
-        raise HTTPException(400, f"burner {payload.burner_id} not found")
-
     client = Client(**payload.model_dump())
     db.add(client)
     db.commit()
@@ -128,9 +126,6 @@ def update_client(client_id: int, payload: ClientUpdate, db: Session = Depends(g
         raise HTTPException(404, "client not found")
 
     updates = payload.model_dump(exclude_unset=True)
-    if updates.get("burner_id") is not None and not db.get(Burner, updates["burner_id"]):
-        raise HTTPException(400, f"burner {updates['burner_id']} not found")
-
     for field, value in updates.items():
         setattr(client, field, value)
     db.commit()
@@ -295,6 +290,33 @@ def extract_brand_profile_route(client_id: int, db: Session = Depends(get_db)):
     # one per request, so this LLM call and the search lookups never share a single
     # request and can't jointly blow the serverless time limit.
     return BrandProfileOut(**profile, source_document_ids=[d.id for d in documents])
+
+
+@router.post("/{client_id}/track-suggested-creators")
+def track_suggested_creators(client_id: int, payload: TrackCreatorsRequest, db: Session = Depends(get_db)):
+    """Resolve the suggested creators' LinkedIn URLs (in parallel) and auto-track the
+    ones we can verify as the right person. Unverified/ambiguous ones are returned as
+    'skipped' for the human to add manually. Used at the end of onboarding."""
+    client = db.get(Client, client_id)
+    if not client:
+        raise HTTPException(404, "client not found")
+
+    items = [{"name": c.name, "profile_url": c.profile_url, "reason": c.reason} for c in payload.creators]
+    resolved = resolve_creators(items, client.specialty or "")
+
+    tracked, skipped = [], []
+    for c in resolved:
+        url = (c.get("profile_url") or "").strip()
+        if c.get("verified") and url:
+            db.add(WatchCreator(client_id=client_id, profile_url=url, label=c["name"]))
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()  # already tracked for this client
+            tracked.append(c["name"])
+        else:
+            skipped.append(c["name"])
+    return {"tracked": tracked, "skipped": skipped}
 
 
 @router.post("/{client_id}/resolve-creator")

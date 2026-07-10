@@ -11,7 +11,6 @@ class ClientOut(BaseModel):
     linkedin_url: Optional[str]
     tone_profile: str
     topics: list[str]
-    burner_id: Optional[int]
     voice_guide: Optional[str] = None
     viewpoints: Optional[str] = None
     audience: Optional[str] = None
@@ -29,7 +28,6 @@ class ClientCreate(BaseModel):
     linkedin_url: Optional[str] = None
     tone_profile: str = ""
     topics: list[str] = []
-    burner_id: Optional[int] = None
     # Optional structured brand fields (set when created from an extracted doc).
     voice_guide: Optional[str] = None
     viewpoints: Optional[str] = None
@@ -45,7 +43,6 @@ class ClientUpdate(BaseModel):
     linkedin_url: Optional[str] = None
     tone_profile: Optional[str] = None
     topics: Optional[list[str]] = None
-    burner_id: Optional[int] = None
     voice_guide: Optional[str] = None
     viewpoints: Optional[str] = None
     audience: Optional[str] = None
@@ -69,6 +66,10 @@ class SuggestedCreator(BaseModel):
     verified: bool = False  # true if the resolved URL's search result matched the name
 
 
+class TrackCreatorsRequest(BaseModel):
+    creators: list[SuggestedCreator] = []
+
+
 class BrandProfileOut(BaseModel):
     """Proposed brand profile extracted from a client's strategy doc(s). Never
     persisted directly — a human reviews/edits each section, then PATCHes the client."""
@@ -81,17 +82,6 @@ class BrandProfileOut(BaseModel):
     topics: list[str] = []
     suggested_creators: list[SuggestedCreator] = []
     source_document_ids: list[int] = []
-
-
-class ProfilePreviewRequest(BaseModel):
-    linkedin_url: str
-    burner_id: int
-
-
-class ProfilePreviewOut(BaseModel):
-    name: str
-    headline: str
-    about: str
 
 
 class WatchCreatorOut(BaseModel):
@@ -107,18 +97,6 @@ class WatchCreatorOut(BaseModel):
 class WatchCreatorCreate(BaseModel):
     profile_url: str
     label: str = ""
-
-
-class BurnerOut(BaseModel):
-    id: int
-    label: str
-    status: str
-    last_health_check_at: Optional[datetime]
-    last_health_ok: bool
-    actions_today: int
-
-    class Config:
-        from_attributes = True
 
 
 class PostOut(BaseModel):

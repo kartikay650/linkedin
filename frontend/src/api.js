@@ -43,7 +43,6 @@ async function requestForm(path, formData) {
 
 export const api = {
   listClients: () => request("/clients"),
-  listBurners: () => request("/burners"),
   createClient: (payload) => request("/clients", { method: "POST", body: JSON.stringify(payload) }),
   docText: (file) => {
     const form = new FormData();
@@ -79,6 +78,8 @@ export const api = {
   extractBrandProfile: (clientId) => request(`/clients/${clientId}/extract-brand-profile`, { method: "POST" }),
   resolveCreator: (clientId, name) =>
     request(`/clients/${clientId}/resolve-creator`, { method: "POST", body: JSON.stringify({ name }) }),
+  trackSuggestedCreators: (clientId, creators) =>
+    request(`/clients/${clientId}/track-suggested-creators`, { method: "POST", body: JSON.stringify({ creators }) }),
 
   listProspects: (clientId) => request(`/clients/${clientId}/prospects`),
   discoverProspects: (clientId) => request(`/clients/${clientId}/prospects/discover`, { method: "POST" }),

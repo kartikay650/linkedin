@@ -17,10 +17,11 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const [progress, setProgress] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [creators, setCreators] = useState([]);
   const [f, setF] = useState(empty);
 
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
-  const reset = () => { setStep(0); setFiles([]); setReading(false); setSaving(false); setError(null); setF(empty); };
+  const reset = () => { setStep(0); setFiles([]); setReading(false); setSaving(false); setError(null); setProgress(null); setCreators([]); setF(empty); };
   const close = () => { reset(); onClose(); };
 
   const addFiles = (list) => {
@@ -52,6 +53,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         viewpoints: p.viewpoints || "", audience: p.audience || "",
         keyMessages: p.key_messages || "", ctaRules: p.cta_rules || "", guardrails: p.guardrails || "",
       });
+      setCreators(Array.isArray(p.suggested_creators) ? p.suggested_creators : []);
       setStep(1);
     } catch (err) {
       setError(err.message);
@@ -72,6 +74,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     setSaving(true);
     setError(null);
     try {
+      setProgress("Creating client…");
       const client = await api.createClient({
         name: f.name.trim(), specialty: f.specialty.trim(),
         linkedin_url: f.linkedinUrl.trim() || null,
@@ -80,12 +83,20 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         viewpoints: f.viewpoints, audience: f.audience,
         key_messages: f.keyMessages, cta_rules: f.ctaRules, guardrails: f.guardrails,
       });
-      for (const file of files) { try { await api.uploadDocument(client.id, file); } catch { /* keep going */ } }
+      if (files.length) {
+        setProgress("Saving documents…");
+        for (const file of files) { try { await api.uploadDocument(client.id, file); } catch { /* keep going */ } }
+      }
+      if (creators.length) {
+        setProgress("Finding people to track…");
+        try { await api.trackSuggestedCreators(client.id, creators.map((c) => ({ name: c.name, reason: c.reason || "" }))); } catch { /* non-fatal */ }
+      }
       reset();
       onCreated(client);
     } catch (err) {
       setError(err.message);
       setSaving(false);
+      setProgress(null);
     }
   };
 
@@ -160,10 +171,24 @@ export default function AddClientModal({ open, onClose, onCreated }) {
           <Field textarea label="Audience" value={f.audience} onChange={(v) => set("audience", v)} placeholder="Who they're speaking to, and their pain points…" />
           <Field textarea label="Key messages" value={f.keyMessages} onChange={(v) => set("keyMessages", v)} placeholder="Core points they want to reinforce…" />
           <Field textarea label="Guardrails" hint="Hard rules the drafter must never break" value={f.guardrails} onChange={(v) => set("guardrails", v)} placeholder="e.g. never make claims without evidence…" />
+          {creators.length > 0 && (
+            <div className="field">
+              <label className="field-label">People we'll track for them</label>
+              <div className="field-hint">Found in the docs — we'll verify and start tracking the right profiles automatically. Review them under "Manage" afterwards.</div>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                {creators.map((c, i) => (
+                  <div key={i} style={{ padding: "9px 12px", borderTop: i ? "1px solid var(--border)" : "none" }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</div>
+                    {c.reason && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{c.reason}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {error && <ErrorLine text={error} />}
           <Footer
-            left={<button className="btn btn-ghost" onClick={back}>Back</button>}
-            right={<button className="btn btn-primary" onClick={create} disabled={saving}>{saving ? <><span className="spin" /> &nbsp;Creating…</> : "Create client"}</button>}
+            left={<button className="btn btn-ghost" onClick={back} disabled={saving}>Back</button>}
+            right={<button className="btn btn-primary" onClick={create} disabled={saving}>{saving ? <><span className="spin" /> &nbsp;{progress || "Creating…"}</> : "Create client"}</button>}
           />
         </div>
       )}

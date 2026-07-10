@@ -25,19 +25,15 @@ function ClientDetailsSection({ client, onUpdated }) {
   const [specialty, setSpecialty] = useState(client.specialty);
   const [linkedinUrl, setLinkedinUrl] = useState(client.linkedin_url || "");
   const [topics, setTopics] = useState(client.topics.join(", "));
-  const [burnerId, setBurnerId] = useState(client.burner_id ? String(client.burner_id) : "");
-  const [burners, setBurners] = useState([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    api.listBurners().then(setBurners);
     setName(client.name);
     setSpecialty(client.specialty);
     setLinkedinUrl(client.linkedin_url || "");
     setTopics(client.topics.join(", "));
-    setBurnerId(client.burner_id ? String(client.burner_id) : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client.id]);
 
@@ -51,7 +47,6 @@ function ClientDetailsSection({ client, onUpdated }) {
         specialty: specialty.trim(),
         linkedin_url: linkedinUrl.trim() || null,
         topics: topics.split(",").map((t) => t.trim()).filter(Boolean),
-        burner_id: burnerId ? Number(burnerId) : null,
       });
       setSaved(true);
       onUpdated?.();
@@ -90,19 +85,6 @@ function ClientDetailsSection({ client, onUpdated }) {
             Topics (comma-separated)
           </label>
           <input style={{ ...inputStyle, width: "100%" }} value={topics} onChange={(e) => setTopics(e.target.value)} />
-        </div>
-        <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
-            Burner account
-          </label>
-          <select style={{ ...inputStyle, width: "100%" }} value={burnerId} onChange={(e) => setBurnerId(e.target.value)}>
-            <option value="">— none assigned —</option>
-            {burners.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.label} ({b.status})
-              </option>
-            ))}
-          </select>
         </div>
         {error && <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
@@ -266,8 +248,8 @@ function ProspectsSection({ client }) {
 
       {notAvailable && (
         <EmptyState
-          title="Not available yet"
-          subtitle="Automated prospect discovery is still being built — LinkedIn search carries a checkpoint risk we haven't solved. Add profiles manually above for now."
+          title="Coming soon"
+          subtitle="Automatic prospect discovery is on the way. For now, people found in the client's documents are tracked automatically, and you can add more under Tracked profiles above."
         />
       )}
 
