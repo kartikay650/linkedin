@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     serverless: bool = False
     supabase_url: str = ""              # e.g. https://<ref>.supabase.co
     supabase_service_key: str = ""      # service role key (server-side only, never shipped to browser)
+    supabase_anon_key: str = ""         # public anon key — used to validate user JWTs against Supabase Auth
     supabase_docs_bucket: str = "client-docs"
 
     anthropic_api_key: str = ""

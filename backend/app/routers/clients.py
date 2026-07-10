@@ -13,11 +13,11 @@ from app.docs.youtube import TranscriptUnavailable, extract_youtube_transcript
 from app.jobs.discovery import run_discovery_for_client, start_discovery_for_client
 from app.llm.brand_profile import extract_brand_profile
 from app.llm.tone_synthesis import synthesize_tone_profile
-from app.scraper.linkedin_lookup import resolve_creators
+from app.scraper.linkedin_lookup import resolve_creator_url
 from app.models import Burner, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
 from app.schemas import (
     BrandProfileOut, ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ProspectOut,
-    ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
+    ResolveCreatorRequest, ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -220,13 +220,22 @@ def extract_brand_profile_route(client_id: int, db: Session = Depends(get_db)):
     if not profile:
         raise HTTPException(502, "couldn't extract a brand profile from the documents")
 
-    # Auto-resolve each suggested creator's LinkedIn URL (best-effort; a human
-    # still confirms before tracking). Context = the client's field, to reduce
-    # same-name false matches.
-    if profile.get("suggested_creators"):
-        profile["suggested_creators"] = resolve_creators(profile["suggested_creators"], client.specialty or "")
-
+    # NOTE: creator LinkedIn URLs are resolved separately (POST .../resolve-creator),
+    # one per request, so this LLM call and the search lookups never share a single
+    # request and can't jointly blow the serverless time limit.
     return BrandProfileOut(**profile, source_document_ids=[d.id for d in documents])
+
+
+@router.post("/{client_id}/resolve-creator")
+def resolve_creator_route(client_id: int, payload: ResolveCreatorRequest, db: Session = Depends(get_db)):
+    """Resolve ONE suggested creator's name to a LinkedIn URL (+verified flag).
+    Split out from extraction so each request is a single fast Apify search run —
+    the frontend calls this per creator, progressively."""
+    client = db.get(Client, client_id)
+    if not client:
+        raise HTTPException(404, "client not found")
+    url, verified = resolve_creator_url(payload.name, client.specialty or "")
+    return {"name": payload.name, "profile_url": url, "verified": verified}
 
 
 @router.get("/{client_id}/prospects", response_model=list[ProspectOut])
