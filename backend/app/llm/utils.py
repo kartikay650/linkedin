@@ -12,4 +12,11 @@ def extract_json(message) -> dict:
         raise ValueError("no text block in Claude response")
 
     cleaned = _FENCE_RE.sub("", text_block.text).strip()
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Tolerate surrounding prose: parse the outermost {...} span.
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(cleaned[start:end + 1])
+        raise ValueError("no parseable JSON object in Claude response")

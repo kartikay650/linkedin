@@ -59,7 +59,7 @@ def extract_brand_profile(client: Client, documents: list[ClientDocument]) -> di
     sources = "\n\n---\n\n".join(d.extracted_text for d in documents if d.extracted_text)
     message = _client.messages.create(
         model=settings.draft_model,
-        max_tokens=3000,
+        max_tokens=8000,
         messages=[{
             "role": "user",
             "content": PROMPT.format(name=client.name, specialty=client.specialty, sources=sources),

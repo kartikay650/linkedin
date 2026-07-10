@@ -1,71 +1,47 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Modal from "./Modal";
 import { api } from "../api";
 
-const inputStyle = {
-  width: "100%",
-  padding: "8px 10px",
-  borderRadius: 8,
-  border: "1px solid var(--border)",
-  fontSize: 13,
-  fontFamily: "inherit",
-  boxSizing: "border-box",
+const STEPS = ["Documents", "Identity", "Voice", "Details"];
+
+const empty = {
+  name: "", specialty: "", linkedinUrl: "", tone: "", topics: "",
+  viewpoints: "", audience: "", keyMessages: "", ctaRules: "", guardrails: "",
 };
 
-const labelStyle = { fontSize: 12, fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: 4 };
-
-const BRAND_KEYS = ["voice_guide", "viewpoints", "audience", "key_messages", "cta_rules", "guardrails"];
-
 export default function AddClientModal({ open, onClose, onCreated }) {
+  const [step, setStep] = useState(0);
   const [files, setFiles] = useState([]);
+  const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(false);
-  const [readNote, setReadNote] = useState(null);
-
-  const [name, setName] = useState("");
-  const [specialty, setSpecialty] = useState("");
-  const [linkedinUrl, setLinkedinUrl] = useState("");
-  const [toneProfile, setToneProfile] = useState("");
-  const [topics, setTopics] = useState("");
-  const [brand, setBrand] = useState({}); // hidden extracted sections, saved on create
-
-  const [burnerId, setBurnerId] = useState("");
-  const [burners, setBurners] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [f, setF] = useState(empty);
 
-  useEffect(() => {
-    if (!open) return;
-    api.listBurners().then((data) => {
-      setBurners(data);
-      if (data.length > 0) setBurnerId(String(data[0].id));
-    }).catch(() => {});
-  }, [open]);
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const reset = () => { setStep(0); setFiles([]); setReading(false); setSaving(false); setError(null); setF(empty); };
+  const close = () => { reset(); onClose(); };
 
-  const reset = () => {
-    setFiles([]); setReading(false); setReadNote(null);
-    setName(""); setSpecialty(""); setLinkedinUrl(""); setToneProfile(""); setTopics(""); setBrand({});
-    setError(null);
+  const addFiles = (list) => {
+    const chosen = Array.from(list || []).filter((x) => /\.(pdf|docx|txt)$/i.test(x.name));
+    if (chosen.length) setFiles((prev) => [...prev, ...chosen]);
   };
+  const removeFile = (i) => setFiles((prev) => prev.filter((_, idx) => idx !== i));
 
-  const handleClose = () => { reset(); onClose(); };
-
-  const handleFiles = async (e) => {
-    const chosen = Array.from(e.target.files || []);
-    if (!chosen.length) return;
-    setFiles(chosen);
-    setReading(true);
-    setReadNote(null);
+  const extractAndContinue = async () => {
     setError(null);
+    if (files.length === 0) { setStep(1); return; } // fill manually
+    setReading(true);
     try {
-      const p = await api.extractFromUpload(chosen);
-      if (p.name) setName(p.name);
-      if (p.specialty) setSpecialty(p.specialty);
-      if (Array.isArray(p.topics)) setTopics(p.topics.join(", "));
-      if (p.voice_guide) setToneProfile(p.voice_guide);
-      const b = {};
-      BRAND_KEYS.forEach((k) => (b[k] = p[k] || ""));
-      setBrand(b);
-      setReadNote("Filled from your document(s) — review and edit anything below before creating.");
+      const p = await api.extractFromUpload(files);
+      setF({
+        name: p.name || "", specialty: p.specialty || "",
+        linkedinUrl: "", tone: p.voice_guide || "",
+        topics: Array.isArray(p.topics) ? p.topics.join(", ") : "",
+        viewpoints: p.viewpoints || "", audience: p.audience || "",
+        keyMessages: p.key_messages || "", ctaRules: p.cta_rules || "", guardrails: p.guardrails || "",
+      });
+      setStep(1);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -73,28 +49,26 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     }
   };
 
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    if (!name.trim() || !specialty.trim()) {
-      setError("Name and specialty are required.");
-      return;
-    }
+  const next = () => {
+    setError(null);
+    if (step === 1 && (!f.name.trim() || !f.specialty.trim())) { setError("Name and specialty are required."); return; }
+    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  };
+  const back = () => { setError(null); setStep((s) => Math.max(s - 1, 0)); };
+
+  const create = async () => {
     setSaving(true);
     setError(null);
     try {
       const client = await api.createClient({
-        name: name.trim(),
-        specialty: specialty.trim(),
-        linkedin_url: linkedinUrl.trim() || null,
-        tone_profile: toneProfile.trim(),
-        topics: topics.split(",").map((t) => t.trim()).filter(Boolean),
-        burner_id: burnerId ? Number(burnerId) : null,
-        ...brand,
+        name: f.name.trim(), specialty: f.specialty.trim(),
+        linkedin_url: f.linkedinUrl.trim() || null,
+        topics: f.topics.split(",").map((t) => t.trim()).filter(Boolean),
+        tone_profile: f.tone.trim(), voice_guide: f.tone.trim(),
+        viewpoints: f.viewpoints, audience: f.audience,
+        key_messages: f.keyMessages, cta_rules: f.ctaRules, guardrails: f.guardrails,
       });
-      // Persist the uploaded docs to the new client (so they're saved + reviewable in Manage).
-      for (const f of files) {
-        try { await api.uploadDocument(client.id, f); } catch { /* keep going */ }
-      }
+      for (const file of files) { try { await api.uploadDocument(client.id, file); } catch { /* keep going */ } }
       reset();
       onCreated(client);
     } catch (err) {
@@ -104,77 +78,135 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   };
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add client">
-      <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {/* Document-first: upload to auto-fill everything below */}
-        <div style={{ border: "1px dashed var(--border)", borderRadius: 10, padding: 14, background: "var(--bg)" }}>
-          <label style={{ ...labelStyle, marginBottom: 6 }}>Upload the client's strategy doc(s) to auto-fill</label>
-          <input type="file" accept=".pdf,.docx,.txt" multiple onChange={handleFiles} disabled={reading || saving} style={{ fontSize: 13 }} />
+    <Modal open={open} onClose={close} title="Add a client" width={560}>
+      <Stepper step={step} />
+
+      {step === 0 && (
+        <div>
+          <StepHead title="Upload their strategy docs" sub="Drop in the client's brand or strategy documents and we'll fill everything in for you. You can add more than one." />
+          <div
+            className={`dropzone${dragging ? " drag" : ""}`}
+            onClick={() => document.getElementById("wiz-file").click()}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Drop files here, or click to choose</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>PDF, Word, or text</div>
+            <input id="wiz-file" type="file" accept=".pdf,.docx,.txt" multiple style={{ display: "none" }} onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+          </div>
+
           {files.length > 0 && (
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
-              {files.map((f) => f.name).join(", ")}
+            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+              {files.map((file, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg)" }}>
+                  <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📄 {file.name}</span>
+                  <button className="btn btn-ghost" style={{ padding: "3px 9px", fontSize: 12 }} onClick={() => removeFile(i)}>Remove</button>
+                </div>
+              ))}
             </div>
           )}
-          {reading && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>Reading documents…</div>}
-          {readNote && <div style={{ fontSize: 12, color: "var(--success)", marginTop: 6 }}>{readNote}</div>}
-          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
-            Optional — you can also fill everything in by hand. PDF, DOCX or TXT.
-          </div>
-        </div>
 
-        <div>
-          <label style={labelStyle}>Client's LinkedIn profile</label>
-          <input style={inputStyle} value={linkedinUrl} onChange={(e) => setLinkedinUrl(e.target.value)} placeholder="https://www.linkedin.com/in/..." />
-        </div>
-        <div>
-          <label style={labelStyle}>Name</label>
-          <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="Dr. Jane Smith" />
-        </div>
-        <div>
-          <label style={labelStyle}>Specialty</label>
-          <input style={inputStyle} value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Cardiology" />
-        </div>
-        <div>
-          <label style={labelStyle}>Topics (comma-separated)</label>
-          <input style={inputStyle} value={topics} onChange={(e) => setTopics(e.target.value)} placeholder="heart failure, statins, cardiac imaging" />
-        </div>
-        <div>
-          <label style={labelStyle}>Burner account (legacy — not needed with Apify)</label>
-          {burners.length === 0 ? (
-            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>None registered. Fetching now runs through Apify, so this isn't required.</div>
-          ) : (
-            <select style={inputStyle} value={burnerId} onChange={(e) => setBurnerId(e.target.value)}>
-              {burners.map((b) => (
-                <option key={b.id} value={b.id}>{b.label} ({b.status})</option>
-              ))}
-            </select>
-          )}
-        </div>
-        <div>
-          <label style={labelStyle}>Tone / voice{brand.voice_guide ? " (auto-filled — editable)" : ""}</label>
-          <textarea
-            style={{ ...inputStyle, minHeight: 80, resize: "vertical" }}
-            value={toneProfile}
-            onChange={(e) => setToneProfile(e.target.value)}
-            placeholder="Voice, do's/don'ts, sample phrases..."
+          {error && <ErrorLine text={error} />}
+
+          <Footer
+            right={
+              <button className="btn btn-primary" onClick={extractAndContinue} disabled={reading}>
+                {reading ? <><span className="spin" /> &nbsp;Reading your documents…</> : files.length ? "Extract & continue" : "Continue"}
+              </button>
+            }
+            leftText={files.length ? null : "No docs? You can fill it in by hand."}
           />
         </div>
-        {Object.values(brand).some((v) => v) && (
-          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            The full brand profile (viewpoints, audience, key messages, guardrails) and suggested creators were also
-            extracted — review and refine them under "Manage profiles" after creating.
-          </div>
-        )}
-        {error && <div style={{ fontSize: 12, color: "var(--danger)" }}>{error}</div>}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-          <button type="button" onClick={handleClose} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", fontSize: 13 }}>
-            Cancel
-          </button>
-          <button type="submit" disabled={saving || reading} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--primary)", color: "#fff", fontSize: 13, fontWeight: 600, opacity: saving || reading ? 0.7 : 1 }}>
-            {saving ? "Creating…" : "Create client"}
-          </button>
+      )}
+
+      {step === 1 && (
+        <div>
+          <StepHead title="Who is the client?" sub="Prefilled from your documents — edit anything." />
+          <Field label="Name" value={f.name} onChange={(v) => set("name", v)} placeholder="Dr. Jane Smith" />
+          <Field label="Specialty" value={f.specialty} onChange={(v) => set("specialty", v)} placeholder="Cardiology" />
+          <Field label="LinkedIn profile" hint="Optional" value={f.linkedinUrl} onChange={(v) => set("linkedinUrl", v)} placeholder="https://www.linkedin.com/in/..." />
+          {error && <ErrorLine text={error} />}
+          <Footer left={<button className="btn btn-ghost" onClick={back}>Back</button>} right={<button className="btn btn-primary" onClick={next}>Continue</button>} />
         </div>
-      </form>
+      )}
+
+      {step === 2 && (
+        <div>
+          <StepHead title="Their voice" sub="How they write — tone, phrasing, do's and don'ts. This shapes every drafted reply." />
+          <Field textarea rows={7} label="Voice & tone" value={f.tone} onChange={(v) => set("tone", v)} placeholder="Direct, warm, cites specific evidence…" />
+          <Field label="Topics" hint="Comma-separated — what they care about" value={f.topics} onChange={(v) => set("topics", v)} placeholder="heart failure, statins, cardiac imaging" />
+          {error && <ErrorLine text={error} />}
+          <Footer left={<button className="btn btn-ghost" onClick={back}>Back</button>} right={<button className="btn btn-primary" onClick={next}>Continue</button>} />
+        </div>
+      )}
+
+      {step === 3 && (
+        <div>
+          <StepHead title="What they stand for" sub="The substance behind their replies — all editable, all extracted from the docs." />
+          <Field textarea label="Viewpoints & opinions" value={f.viewpoints} onChange={(v) => set("viewpoints", v)} placeholder="The positions they actually hold…" />
+          <Field textarea label="Audience" value={f.audience} onChange={(v) => set("audience", v)} placeholder="Who they're speaking to, and their pain points…" />
+          <Field textarea label="Key messages" value={f.keyMessages} onChange={(v) => set("keyMessages", v)} placeholder="Core points they want to reinforce…" />
+          <Field textarea label="Guardrails" hint="Hard rules the drafter must never break" value={f.guardrails} onChange={(v) => set("guardrails", v)} placeholder="e.g. never make claims without evidence…" />
+          {error && <ErrorLine text={error} />}
+          <Footer
+            left={<button className="btn btn-ghost" onClick={back}>Back</button>}
+            right={<button className="btn btn-primary" onClick={create} disabled={saving}>{saving ? <><span className="spin" /> &nbsp;Creating…</> : "Create client"}</button>}
+          />
+        </div>
+      )}
     </Modal>
+  );
+}
+
+function Stepper({ step }) {
+  return (
+    <div className="stepper">
+      {STEPS.map((label, i) => (
+        <div key={label} style={{ display: "flex", alignItems: "center", flex: i < STEPS.length - 1 ? 1 : "0 0 auto" }}>
+          <div className="step-node">
+            <div className={`step-dot${i === step ? " active" : i < step ? " done" : ""}`}>{i < step ? "✓" : i + 1}</div>
+            <span className={`step-label${i === step ? " active" : ""}`}>{label}</span>
+          </div>
+          {i < STEPS.length - 1 && <div className={`step-bar${i < step ? " done" : ""}`} />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StepHead({ title, sub }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 17, fontWeight: 700 }}>{title}</div>
+      {sub && <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.5 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Field({ label, hint, value, onChange, placeholder, textarea, rows }) {
+  return (
+    <div className="field">
+      <label className="field-label">{label}</label>
+      {hint && <div className="field-hint">{hint}</div>}
+      {textarea ? (
+        <textarea className="field-textarea" rows={rows || 4} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      ) : (
+        <input className="field-input" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      )}
+    </div>
+  );
+}
+
+function ErrorLine({ text }) {
+  return <div style={{ fontSize: 13, color: "var(--danger)", background: "var(--danger-bg)", padding: "8px 12px", borderRadius: 8, marginBottom: 12 }}>{text}</div>;
+}
+
+function Footer({ left, right, leftText }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 22 }}>
+      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{left || leftText || <span />}</div>
+      <div>{right}</div>
+    </div>
   );
 }
