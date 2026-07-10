@@ -55,8 +55,15 @@ Respond ONLY with JSON:
 "suggested_creators": [{{"name": "...", "profile_url": "...", "reason": "..."}}]}}"""
 
 
+# Cap combined source text so one extraction call stays well under the serverless
+# time limit even when several long docs (e.g. a full interview transcript) are
+# uploaded at once. ~60k chars ≈ 15k tokens — plenty of signal for a brand profile.
+_MAX_SOURCE_CHARS = 60000
+
+
 def extract_brand_profile(client: Client, documents: list[ClientDocument]) -> dict:
     sources = "\n\n---\n\n".join(d.extracted_text for d in documents if d.extracted_text)
+    sources = sources[:_MAX_SOURCE_CHARS]
     message = _client.messages.create(
         model=settings.draft_model,
         max_tokens=8000,
