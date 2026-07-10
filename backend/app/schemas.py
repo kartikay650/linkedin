@@ -58,6 +58,10 @@ class ResolveCreatorRequest(BaseModel):
     name: str
 
 
+class ExtractBrandRequest(BaseModel):
+    text: str
+
+
 class SuggestedCreator(BaseModel):
     name: str
     profile_url: str = ""   # auto-resolved from the name during onboarding; human confirms

@@ -16,8 +16,8 @@ from app.llm.tone_synthesis import synthesize_tone_profile
 from app.scraper.linkedin_lookup import resolve_creator_url
 from app.models import Burner, Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
 from app.schemas import (
-    BrandProfileOut, ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ProspectOut,
-    ResolveCreatorRequest, ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
+    BrandProfileOut, ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ExtractBrandRequest,
+    ProspectOut, ResolveCreatorRequest, ToneSynthesisOut, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -40,6 +40,40 @@ def create_client(payload: ClientCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(client)
     return client
+
+
+@router.post("/doc-text")
+def doc_text(file: UploadFile):
+    """Extract plain text from ONE uploaded file and return it. Files are sent
+    individually (not batched) so a large image-heavy PDF doesn't blow the
+    serverless request-body limit. Nothing is persisted."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(400, f"unsupported file type {ext!r} — allowed: {sorted(ALLOWED_UPLOAD_EXTENSIONS)}")
+    contents = file.file.read()
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
+        tf.write(contents)
+        tmp_path = tf.name
+    try:
+        text = extract_text(tmp_path)
+    except Exception:
+        text = ""
+    finally:
+        os.remove(tmp_path)
+    return {"filename": file.filename, "text": text or ""}
+
+
+@router.post("/extract-brand")
+def extract_brand(payload: ExtractBrandRequest):
+    """Extract a brand profile from already-extracted text (see /doc-text). The
+    payload is small text, so no request-size concerns. Nothing is persisted."""
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(400, "no text to extract from")
+    profile = extract_brand_profile(Client(name="", specialty=""), [ClientDocument(extracted_text=text)])
+    if not profile:
+        raise HTTPException(502, "couldn't extract details from the documents")
+    return profile
 
 
 @router.post("/extract-from-upload")

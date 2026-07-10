@@ -14,6 +14,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const [files, setFiles] = useState([]);
   const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [f, setF] = useState(empty);
@@ -33,7 +34,17 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     if (files.length === 0) { setStep(1); return; } // fill manually
     setReading(true);
     try {
-      const p = await api.extractFromUpload(files);
+      // Read each file's text one at a time (keeps each request small), then
+      // extract from the combined text.
+      let combined = "";
+      for (let i = 0; i < files.length; i++) {
+        setProgress(`Reading ${files[i].name} (${i + 1}/${files.length})…`);
+        const r = await api.docText(files[i]);
+        if (r.text && r.text.trim()) combined += r.text + "\n\n---\n\n";
+      }
+      if (!combined.trim()) throw new Error("Couldn't read any text from those files.");
+      setProgress("Extracting the details…");
+      const p = await api.extractBrand(combined);
       setF({
         name: p.name || "", specialty: p.specialty || "",
         linkedinUrl: "", tone: p.voice_guide || "",
@@ -46,6 +57,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       setError(err.message);
     } finally {
       setReading(false);
+      setProgress(null);
     }
   };
 
@@ -112,7 +124,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
           <Footer
             right={
               <button className="btn btn-primary" onClick={extractAndContinue} disabled={reading}>
-                {reading ? <><span className="spin" /> &nbsp;Reading your documents…</> : files.length ? "Extract & continue" : "Continue"}
+                {reading ? <><span className="spin" /> &nbsp;{progress || "Reading…"}</> : files.length ? "Extract & continue" : "Continue"}
               </button>
             }
             leftText={files.length ? null : "No docs? You can fill it in by hand."}

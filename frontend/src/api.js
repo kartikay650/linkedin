@@ -45,11 +45,12 @@ export const api = {
   listClients: () => request("/clients"),
   listBurners: () => request("/burners"),
   createClient: (payload) => request("/clients", { method: "POST", body: JSON.stringify(payload) }),
-  extractFromUpload: (files) => {
+  docText: (file) => {
     const form = new FormData();
-    files.forEach((f) => form.append("files", f));
-    return requestForm("/clients/extract-from-upload", form);
+    form.append("file", file);
+    return requestForm("/clients/doc-text", form);
   },
+  extractBrand: (text) => request("/clients/extract-brand", { method: "POST", body: JSON.stringify({ text }) }),
   updateClient: (clientId, payload) =>
     request(`/clients/${clientId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   listPosts: (clientId) => request(`/clients/${clientId}/posts`),
