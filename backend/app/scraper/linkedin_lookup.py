@@ -59,7 +59,11 @@ def _first_profile(items: list[dict], name: str) -> tuple[str, bool]:
 
 
 def resolve_creator_url(name: str, context: str = "") -> tuple[str, bool]:
-    query = f'"{_clean_name(name)}" {context} site:linkedin.com/in'.strip()
+    # Search by name + site filter only. We deliberately do NOT append the client's
+    # specialty — a long, punctuation-heavy specialty string over-constrains the
+    # Google query and returns zero results. The name-match check on the result
+    # title (see _first_profile) is what guards against same-named strangers.
+    query = f'"{_clean_name(name)}" site:linkedin.com/in'
     payload = {"queries": query, "maxPagesPerQuery": 1, "resultsPerPage": 10, "saveHtml": False}
     try:
         items = run_actor(settings.apify_search_actor_id, payload)
