@@ -42,6 +42,43 @@ def create_client(payload: ClientCreate, db: Session = Depends(get_db)):
     return client
 
 
+@router.post("/extract-from-upload")
+def extract_from_upload(files: list[UploadFile], db: Session = Depends(get_db)):
+    """Read one or more uploaded strategy docs and return extracted client details
+    (name, specialty, topics, voice, viewpoints, audience, key messages, CTA rules,
+    guardrails, suggested creators) WITHOUT creating anything. Powers the document-
+    first add-client flow: upload → auto-fill the form → human reviews → Create."""
+    texts = []
+    for f in files or []:
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+            continue
+        contents = f.file.read()
+        if len(contents) > settings.max_upload_size_mb * 1024 * 1024:
+            raise HTTPException(400, f"{f.filename} exceeds {settings.max_upload_size_mb}MB limit")
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
+            tf.write(contents)
+            tmp_path = tf.name
+        try:
+            t = extract_text(tmp_path)
+            if t and t.strip():
+                texts.append(t)
+        except Exception:
+            pass
+        finally:
+            os.remove(tmp_path)
+
+    if not texts:
+        raise HTTPException(400, "couldn't read any text from those files (supported: .pdf, .docx, .txt)")
+
+    stub_client = Client(name="", specialty="")
+    stub_docs = [ClientDocument(extracted_text=t) for t in texts]
+    profile = extract_brand_profile(stub_client, stub_docs)
+    if not profile:
+        raise HTTPException(502, "couldn't extract details from the documents")
+    return profile
+
+
 @router.get("/{client_id}", response_model=ClientOut)
 def get_client(client_id: int, db: Session = Depends(get_db)):
     client = db.get(Client, client_id)

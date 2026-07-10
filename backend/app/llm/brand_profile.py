@@ -12,7 +12,7 @@ which posts are worth the client commenting on, and (2) drafting comment replies
 like this person and stay on-brand. Extract ONLY what the source material actually supports — do not invent \
 positions, facts, or claims. If a section is thin, keep it short rather than padding it.
 
-Client: {name}, {specialty}
+Client (may be blank — infer from the material if so): {name}, {specialty}
 
 Source material:
 \"\"\"
@@ -20,6 +20,9 @@ Source material:
 \"\"\"
 
 Produce these sections:
+
+- name: the client's full name exactly as it appears in the material (e.g. "Dr. Jane Smith"). Empty string if truly not stated.
+- specialty: their professional specialty/field in a few words (e.g. "Cardiology", "Longevity & preventive medicine").
 
 - voice_guide: How this person writes. Tone, register, sentence rhythm, recurring habits, explicit do's and \
 don'ts, and a few short sample phrasings drawn from the material. This is for imitating their voice.
@@ -47,8 +50,9 @@ be used, claims that must be cited, subjects to avoid). Phrase each as a clear r
 profile_url (empty string if no URL is present in the source), and a one-line reason.
 
 Respond ONLY with JSON:
-{{"voice_guide": "...", "viewpoints": "...", "audience": "...", "key_messages": "...", "cta_rules": "...", \
-"guardrails": "...", "topics": ["..."], "suggested_creators": [{{"name": "...", "profile_url": "...", "reason": "..."}}]}}"""
+{{"name": "...", "specialty": "...", "voice_guide": "...", "viewpoints": "...", "audience": "...", \
+"key_messages": "...", "cta_rules": "...", "guardrails": "...", "topics": ["..."], \
+"suggested_creators": [{{"name": "...", "profile_url": "...", "reason": "..."}}]}}"""
 
 
 def extract_brand_profile(client: Client, documents: list[ClientDocument]) -> dict:
@@ -86,6 +90,8 @@ def extract_brand_profile(client: Client, documents: list[ClientDocument]) -> di
                 })
 
     return {
+        "name": _s("name"),
+        "specialty": _s("specialty"),
         "voice_guide": _s("voice_guide"),
         "viewpoints": _s("viewpoints"),
         "audience": _s("audience"),

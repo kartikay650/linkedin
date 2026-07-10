@@ -30,6 +30,13 @@ class ClientCreate(BaseModel):
     tone_profile: str = ""
     topics: list[str] = []
     burner_id: Optional[int] = None
+    # Optional structured brand fields (set when created from an extracted doc).
+    voice_guide: Optional[str] = None
+    viewpoints: Optional[str] = None
+    audience: Optional[str] = None
+    key_messages: Optional[str] = None
+    cta_rules: Optional[str] = None
+    guardrails: Optional[str] = None
 
 
 class ClientUpdate(BaseModel):
