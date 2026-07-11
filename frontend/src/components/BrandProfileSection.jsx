@@ -7,11 +7,11 @@ import { sectionStyle, sectionTitleStyle, smallButtonStyle, inputStyle } from ".
 // the client's uploaded strategy docs, then human-reviewed field-by-field before saving.
 const FIELDS = [
   ["voice_guide", "Voice & how they write", "Tone, style, do's and don'ts, sample phrasings"],
-  ["viewpoints", "Viewpoints / stances", "Their actual opinions — used to take real positions in replies"],
-  ["audience", "Audience & pain points", "Who they're reaching — used to judge which posts are worth engaging"],
+  ["viewpoints", "Viewpoints / stances", "Their actual opinions, used to take real positions in replies"],
+  ["audience", "Audience & pain points", "Who they're reaching, used to judge which posts are worth engaging"],
   ["key_messages", "Key messages / proof points", "Core positioning they want to reinforce"],
   ["cta_rules", "CTA rules", "How/when to point to resources, and what NOT to push"],
-  ["guardrails", "Guardrails (hard rules)", "Rules the drafter must never violate — enforced on every draft"],
+  ["guardrails", "Guardrails (hard rules)", "Rules the drafter must never violate, enforced on every draft"],
 ];
 
 const labelStyle = { fontSize: 12, fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: 4 };
@@ -129,7 +129,7 @@ export default function BrandProfileSection({ client, onUpdated }) {
       </div>
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
         Upload the client's strategy doc under "Tone &amp; reference material" below, then extract. Review and edit every
-        section before saving — nothing is applied until you save.
+        section before saving, nothing is applied until you save.
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -160,7 +160,7 @@ export default function BrandProfileSection({ client, onUpdated }) {
       {suggested.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-            <label style={labelStyle}>Suggested profiles to track (links auto-resolved — confirm before tracking)</label>
+            <label style={labelStyle}>Suggested profiles to track (links auto-resolved, confirm before tracking)</label>
             {suggested.some((c) => c.verified && c.profile_url?.trim()) && (
               <button onClick={handleTrackAllVerified} style={smallButtonStyle}>
                 Track all verified
@@ -187,16 +187,16 @@ export default function BrandProfileSection({ client, onUpdated }) {
                       border: `1px solid ${c.verified ? "var(--success)" : "var(--border)"}`,
                     }}
                   >
-                    {c.verified ? "✓ verified" : "unverified — check"}
+                    {c.verified ? "✓ verified" : "unverified, check"}
                   </span>
                 ) : (
-                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>no link found — paste manually</span>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>no link found, paste manually</span>
                 )}
               </div>
               {c.reason && <div style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0 6px" }}>{c.reason}</div>}
               <div style={{ display: "flex", gap: 6 }}>
                 <input
-                  placeholder="LinkedIn profile URL (not found — paste manually)"
+                  placeholder="LinkedIn profile URL (not found, paste manually)"
                   value={c.profile_url || ""}
                   onChange={(e) => updateCreatorUrl(idx, e.target.value)}
                   style={{ ...inputStyle, flex: 1 }}

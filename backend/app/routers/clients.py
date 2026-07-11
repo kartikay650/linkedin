@@ -133,6 +133,16 @@ def update_client(client_id: int, payload: ClientUpdate, db: Session = Depends(g
     return client
 
 
+@router.delete("/{client_id}")
+def delete_client(client_id: int, db: Session = Depends(get_db)):
+    client = db.get(Client, client_id)
+    if not client:
+        raise HTTPException(404, "client not found")
+    db.delete(client)  # cascades to documents, watch-creators, posts, prospects
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/{client_id}/watch-creators", response_model=list[WatchCreatorOut])
 def list_watch_creators(client_id: int, db: Session = Depends(get_db)):
     return db.query(WatchCreator).filter(WatchCreator.client_id == client_id).all()

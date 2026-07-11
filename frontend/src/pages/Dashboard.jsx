@@ -12,6 +12,7 @@ export default function Dashboard() {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState(null);
   const [syncError, setSyncError] = useState(null);
   const [showAddClient, setShowAddClient] = useState(false);
   const [showManageClient, setShowManageClient] = useState(false);
@@ -29,13 +30,13 @@ export default function Dashboard() {
     });
   }, [loadClients]);
 
-  const loadPosts = useCallback(() => {
+  const loadPosts = useCallback((silent) => {
     if (!selectedClientId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     api
       .listPosts(selectedClientId)
       .then(setPosts)
-      .finally(() => setLoading(false));
+      .finally(() => { if (!silent) setLoading(false); });
   }, [selectedClientId]);
 
   useEffect(() => {
@@ -45,11 +46,22 @@ export default function Dashboard() {
   const handleSync = async () => {
     setSyncing(true);
     setSyncError(null);
+    setSyncNote(null);
     try {
-      await api.syncClient(selectedClientId);
-      loadPosts();
+      const res = await api.syncClient(selectedClientId);
+      if (res && res.status === "started") {
+        // Posts arrive shortly after the fetch finishes; refresh a few times.
+        setSyncNote("Fetching posts. New ones will appear here in a minute or so.");
+        for (let i = 0; i < 6; i++) {
+          await new Promise((r) => setTimeout(r, 15000));
+          loadPosts(true);
+        }
+        setSyncNote(null);
+      } else {
+        loadPosts();
+      }
     } catch (e) {
-      setSyncError(e.message || "Sync failed — see backend logs.");
+      setSyncError(e.message || "Sync failed. Please try again.");
     } finally {
       setSyncing(false);
     }
@@ -72,7 +84,7 @@ export default function Dashboard() {
             <div>
               <h1 style={{ fontSize: 22, margin: 0 }}>{selectedClient.name}</h1>
               <div style={{ color: "var(--text-muted)", fontSize: 14, marginTop: 4 }}>
-                {selectedClient.specialty} — review queue
+                {selectedClient.specialty}
               </div>
             </div>
             <div style={{ textAlign: "right", display: "flex", gap: 8 }}>
@@ -88,7 +100,7 @@ export default function Dashboard() {
                   boxShadow: "var(--shadow)",
                 }}
               >
-                Manage profiles
+                Manage profile
               </button>
               <div>
                 <button
@@ -106,9 +118,9 @@ export default function Dashboard() {
                 >
                   {syncing ? "Syncing…" : "Sync now"}
                 </button>
-                {syncing && (
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, maxWidth: 200 }}>
-                    Can take a few minutes — requests are deliberately paced to protect the account.
+                {syncNote && (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, maxWidth: 210 }}>
+                    {syncNote}
                   </div>
                 )}
                 {syncError && (
@@ -127,8 +139,8 @@ export default function Dashboard() {
 
         {selectedClient && !loading && posts.length === 0 && (
           <EmptyState
-            title="All caught up"
-            subtitle="No pending drafts for this client right now — check back after the next scrape run."
+            title="No posts yet"
+            subtitle="Hit Sync now to pull the latest posts from this client's tracked profiles."
           />
         )}
 
@@ -151,6 +163,10 @@ export default function Dashboard() {
         onClose={() => setShowManageClient(false)}
         client={selectedClient}
         onUpdated={loadClients}
+        onDeleted={() => {
+          setShowManageClient(false);
+          loadClients().then((data) => setSelectedClientId(data.length ? data[0].id : null));
+        }}
       />
     </div>
   );

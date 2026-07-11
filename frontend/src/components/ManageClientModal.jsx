@@ -7,7 +7,7 @@ import BrandProfileSection from "./BrandProfileSection";
 import { api } from "../api";
 import { sectionStyle, sectionTitleStyle, smallButtonStyle, inputStyle } from "./modalStyles";
 
-export default function ManageClientModal({ open, onClose, client, onUpdated }) {
+export default function ManageClientModal({ open, onClose, client, onUpdated, onDeleted }) {
   if (!open || !client) return null;
   return (
     <Modal open={open} onClose={onClose} title={`Manage ${client.name}`} width={640}>
@@ -16,7 +16,42 @@ export default function ManageClientModal({ open, onClose, client, onUpdated }) 
       <ProspectsSection client={client} />
       <ToneDocumentsSection client={client} onUpdated={onUpdated} />
       <BrandProfileSection client={client} onUpdated={onUpdated} />
+      <DeleteClientSection client={client} onDeleted={onDeleted} />
     </Modal>
+  );
+}
+
+function DeleteClientSection({ client, onDeleted }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete ${client.name}? This removes their profile, documents, tracked profiles and posts. This can't be undone.`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteClient(client.id);
+      onDeleted?.(client.id);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginTop: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Remove this client and everything associated with them.</div>
+        <button
+          onClick={handleDelete}
+          disabled={busy}
+          style={{ ...smallButtonStyle, color: "var(--danger)", borderColor: "var(--border)" }}
+        >
+          {busy ? "Deleting…" : "Delete client"}
+        </button>
+      </div>
+      {error && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 8 }}>{error}</div>}
+    </section>
   );
 }
 

@@ -145,7 +145,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
 
       {step === 1 && (
         <div>
-          <StepHead title="Who is the client?" sub="Prefilled from your documents — edit anything." />
+          <StepHead title="Who is the client?" sub="Prefilled from your documents, edit anything." />
           <Field label="Name" value={f.name} onChange={(v) => set("name", v)} placeholder="Dr. Jane Smith" />
           <Field label="Specialty" value={f.specialty} onChange={(v) => set("specialty", v)} placeholder="Cardiology" />
           <Field label="LinkedIn profile" hint="Optional" value={f.linkedinUrl} onChange={(v) => set("linkedinUrl", v)} placeholder="https://www.linkedin.com/in/..." />
@@ -156,9 +156,9 @@ export default function AddClientModal({ open, onClose, onCreated }) {
 
       {step === 2 && (
         <div>
-          <StepHead title="Their voice" sub="How they write — tone, phrasing, do's and don'ts. This shapes every drafted reply." />
+          <StepHead title="Their voice" sub="How they write, tone, phrasing, do's and don'ts. This shapes every drafted reply." />
           <Field textarea rows={7} label="Voice & tone" value={f.tone} onChange={(v) => set("tone", v)} placeholder="Direct, warm, cites specific evidence…" />
-          <Field label="Topics" hint="Comma-separated — what they care about" value={f.topics} onChange={(v) => set("topics", v)} placeholder="heart failure, statins, cardiac imaging" />
+          <Field label="Topics" hint="Comma-separated, what they care about" value={f.topics} onChange={(v) => set("topics", v)} placeholder="heart failure, statins, cardiac imaging" />
           {error && <ErrorLine text={error} />}
           <Footer left={<button className="btn btn-ghost" onClick={back}>Back</button>} right={<button className="btn btn-primary" onClick={next}>Continue</button>} />
         </div>
@@ -166,7 +166,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
 
       {step === 3 && (
         <div>
-          <StepHead title="What they stand for" sub="The substance behind their replies — all editable, all extracted from the docs." />
+          <StepHead title="What they stand for" sub="The substance behind their replies, all editable, all extracted from the docs." />
           <Field textarea label="Viewpoints & opinions" value={f.viewpoints} onChange={(v) => set("viewpoints", v)} placeholder="The positions they actually hold…" />
           <Field textarea label="Audience" value={f.audience} onChange={(v) => set("audience", v)} placeholder="Who they're speaking to, and their pain points…" />
           <Field textarea label="Key messages" value={f.keyMessages} onChange={(v) => set("keyMessages", v)} placeholder="Core points they want to reinforce…" />
@@ -174,7 +174,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
           {creators.length > 0 && (
             <div className="field">
               <label className="field-label">People we'll track for them</label>
-              <div className="field-hint">Found in the docs — we'll verify and start tracking the right profiles automatically. Review them under "Manage" afterwards.</div>
+              <div className="field-hint">Found in the docs, we'll verify and start tracking the right profiles automatically. Review them under "Manage" afterwards.</div>
               <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
                 {creators.map((c, i) => (
                   <div key={i} style={{ padding: "9px 12px", borderTop: i ? "1px solid var(--border)" : "none" }}>

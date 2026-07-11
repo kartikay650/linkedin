@@ -11,8 +11,8 @@ async function authHeader() {
 
 async function handle(res, path, method) {
   if (res.status === 401) {
-    await supabase.auth.signOut(); // session expired — bounce back to login
-    throw new Error("Your session expired — please sign in again.");
+    await supabase.auth.signOut(); // session expired, bounce back to login
+    throw new Error("Your session expired, please sign in again.");
   }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
@@ -30,7 +30,7 @@ async function request(path, options = {}) {
   return handle(res, path, options.method);
 }
 
-// Multipart uploads must NOT set Content-Type manually — the browser needs to
+// Multipart uploads must NOT set Content-Type manually, the browser needs to
 // generate the boundary itself, which it can only do if fetch sets the header.
 async function requestForm(path, formData) {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -52,6 +52,7 @@ export const api = {
   extractBrand: (text) => request("/clients/extract-brand", { method: "POST", body: JSON.stringify({ text }) }),
   updateClient: (clientId, payload) =>
     request(`/clients/${clientId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteClient: (clientId) => request(`/clients/${clientId}`, { method: "DELETE" }),
   listPosts: (clientId) => request(`/clients/${clientId}/posts`),
   updateDraft: (draftId, payload) =>
     request(`/drafts/${draftId}`, { method: "PATCH", body: JSON.stringify(payload) }),
