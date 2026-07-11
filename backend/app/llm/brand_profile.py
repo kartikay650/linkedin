@@ -47,7 +47,10 @@ be used, claims that must be cited, subjects to avoid). Phrase each as a clear r
 - topics: A flat list of the subjects/keywords central to this client's field (for matching relevant posts).
 
 - suggested_creators: People named in the material as worth watching or engaging with. For each, give name, \
-profile_url (empty string if no URL is present in the source), and a one-line reason.
+profile_url, and a one-line reason. IMPORTANT: the material may end with a "[LinkedIn profile links referenced \
+in this document]" list — match each person to their profile URL from that list using the name in the URL slug \
+(e.g. "/in/delphine-legrand..." → Delphine LeGrand), and put it in profile_url. These links are authoritative; \
+prefer them over any guess. Leave profile_url empty only if there's genuinely no matching link.
 
 Respond ONLY with JSON:
 {{"name": "...", "specialty": "...", "voice_guide": "...", "viewpoints": "...", "audience": "...", \

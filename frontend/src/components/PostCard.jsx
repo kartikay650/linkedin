@@ -97,7 +97,7 @@ export default function PostCard({ post, onActioned }) {
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <Badge tone={relevanceTone(post.relevance_score ?? 0)}>
-          relevance {(post.relevance_score ?? 0).toFixed(2)}
+          relevance {Math.round((post.relevance_score ?? 0) * 10)}/10
         </Badge>
       </div>
       {post.relevance_reason && (

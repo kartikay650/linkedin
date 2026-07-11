@@ -89,7 +89,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       }
       if (creators.length) {
         setProgress("Finding people to track…");
-        try { await api.trackSuggestedCreators(client.id, creators.map((c) => ({ name: c.name, reason: c.reason || "" }))); } catch { /* non-fatal */ }
+        try { await api.trackSuggestedCreators(client.id, creators.map((c) => ({ name: c.name, reason: c.reason || "", profile_url: c.profile_url || "" }))); } catch { /* non-fatal */ }
       }
       reset();
       onCreated(client);
