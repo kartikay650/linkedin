@@ -1,6 +1,9 @@
 import { useState } from "react";
 import Modal from "./Modal";
 import { api } from "../api";
+import { toast } from "../toast";
+
+const looksLikeTimeout = (msg) => /fetch|timeout|timed out|504|network/i.test(msg || "");
 
 const STEPS = ["Documents", "Identity", "Voice", "Details"];
 
@@ -56,7 +59,11 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       setCreators(Array.isArray(p.suggested_creators) ? p.suggested_creators : []);
       setStep(1);
     } catch (err) {
-      setError(err.message);
+      const msg = looksLikeTimeout(err.message)
+        ? "That took too long to read. Try again, or upload fewer / smaller documents."
+        : `Couldn't read those documents: ${err.message}`;
+      setError(msg);
+      toast(msg);
     } finally {
       setReading(false);
       setProgress(null);
@@ -94,7 +101,9 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       reset();
       onCreated(client);
     } catch (err) {
-      setError(err.message);
+      const msg = looksLikeTimeout(err.message) ? "That took too long. Please try again." : `Couldn't create the client: ${err.message}`;
+      setError(msg);
+      toast(msg);
       setSaving(false);
       setProgress(null);
     }

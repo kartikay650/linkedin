@@ -60,23 +60,38 @@ def _to_int(v):
         return v
 
 
+def _tokens() -> list[str]:
+    """All configured Apify account tokens, in failover order."""
+    toks = [t.strip() for t in (settings.apify_tokens or "").split(",") if t.strip()]
+    if not toks and settings.apify_token:
+        toks = [settings.apify_token]
+    return toks
+
+
 def run_actor(actor_id: str, payload: dict) -> list[dict]:
-    """Start any Apify actor async, poll until it finishes, and return the raw
-    dataset items. Async-run-and-poll (not run-sync) because pay-per-event actors
-    don't reliably return items from the sync endpoint, but their default dataset
-    is always populated."""
-    if not settings.apify_token:
-        raise ApifyError("APIFY_TOKEN is not set — add it to .env to use Apify")
-
+    """Start an actor, poll to completion, return dataset items. Tries each Apify
+    account in turn — if one is out of monthly credit (or errors), it falls over to
+    the next, so multiple free accounts behave as one larger balance."""
+    toks = _tokens()
+    if not toks:
+        raise ApifyError("no Apify token configured")
     actor = actor_id.replace("/", "~")
-    token = {"token": settings.apify_token}
+    last = None
+    for tok in toks:
+        try:
+            return _run_with_token(actor, payload, tok)
+        except ApifyError as e:
+            last = e
+    raise last or ApifyError("all Apify accounts failed")
 
+
+def _run_with_token(actor: str, payload: dict, tok: str) -> list[dict]:
+    token = {"token": tok}
     r = httpx.post(f"{API_ROOT}/acts/{actor}/runs", params=token, json=payload, timeout=60)
     if r.status_code >= 400:
-        raise ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:400]}")
+        raise ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:300]}")
     run = r.json()["data"]
     run_id = run["id"]
-
     deadline = settings.apify_timeout_seconds
     waited, interval = 0, 3
     status = run["status"]
@@ -86,17 +101,11 @@ def run_actor(actor_id: str, payload: dict) -> list[dict]:
         waited += interval
         s = httpx.get(f"{API_ROOT}/actor-runs/{run_id}", params=token, timeout=30).json()["data"]
         status, dataset_id = s["status"], s.get("defaultDatasetId", dataset_id)
-
     if status != "SUCCEEDED":
         raise ApifyError(f"actor run did not succeed (status={status} after {waited}s)")
     if not dataset_id:
         raise ApifyError("actor run has no dataset id")
-
-    items = httpx.get(
-        f"{API_ROOT}/datasets/{dataset_id}/items",
-        params={**token, "clean": "true"},
-        timeout=60,
-    ).json()
+    items = httpx.get(f"{API_ROOT}/datasets/{dataset_id}/items", params={**token, "clean": "true"}, timeout=60).json()
     if not isinstance(items, list):
         raise ApifyError(f"expected a list of dataset items, got: {str(items)[:300]}")
     return items
@@ -108,29 +117,53 @@ def run_actor_raw(profile_url: str, limit: int) -> list[dict]:
 
 
 def start_actor(actor_id: str, payload: dict, webhook: dict | None = None) -> str:
-    """Fire-and-forget: start an actor run and return its run id immediately, WITHOUT
-    polling. Optionally attach a per-run webhook so Apify calls us back when the run
-    finishes (the serverless-friendly path — no function stays open for minutes)."""
-    if not settings.apify_token:
-        raise ApifyError("APIFY_TOKEN is not set — add it to .env to use Apify")
+    """Fire-and-forget: start an actor run and return its run id. Tries each account
+    until one accepts the run (failover on exhausted credit)."""
+    toks = _tokens()
+    if not toks:
+        raise ApifyError("no Apify token configured")
     actor = actor_id.replace("/", "~")
-    params = {"token": settings.apify_token}
-    if webhook:
-        params["webhooks"] = base64.b64encode(json.dumps([webhook]).encode()).decode()
-    r = httpx.post(f"{API_ROOT}/acts/{actor}/runs", params=params, json=payload, timeout=60)
-    if r.status_code >= 400:
-        raise ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:400]}")
-    return r.json()["data"]["id"]
+    last = None
+    for tok in toks:
+        params = {"token": tok}
+        if webhook:
+            params["webhooks"] = base64.b64encode(json.dumps([webhook]).encode()).decode()
+        try:
+            r = httpx.post(f"{API_ROOT}/acts/{actor}/runs", params=params, json=payload, timeout=60)
+            if r.status_code >= 400:
+                last = ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:300]}")
+                continue
+            return r.json()["data"]["id"]
+        except httpx.HTTPError as e:
+            last = ApifyError(str(e))
+    raise last or ApifyError("all Apify accounts failed to start the run")
 
 
 def dataset_items(dataset_id: str) -> list[dict]:
-    """Fetch a finished run's dataset items by id (used by the webhook handler)."""
-    r = httpx.get(f"{API_ROOT}/datasets/{dataset_id}/items",
-                  params={"token": settings.apify_token, "clean": "true"}, timeout=60)
-    if r.status_code >= 400:
-        raise ApifyError(f"couldn't fetch dataset {dataset_id} ({r.status_code})")
-    items = r.json()
-    return items if isinstance(items, list) else []
+    """Fetch a dataset's items. The dataset belongs to whichever account ran it, so
+    we try each token until the owning one succeeds."""
+    for tok in _tokens():
+        r = httpx.get(f"{API_ROOT}/datasets/{dataset_id}/items", params={"token": tok, "clean": "true"}, timeout=60)
+        if r.status_code < 400:
+            items = r.json()
+            return items if isinstance(items, list) else []
+    return []
+
+
+def account_usage() -> list[dict]:
+    """Per-account monthly spend vs credit, for the expense tracker."""
+    out = []
+    for i, tok in enumerate(_tokens(), 1):
+        entry = {"account": i, "used_usd": None, "limit_usd": None}
+        try:
+            usage = httpx.get(f"{API_ROOT}/users/me/usage/monthly", params={"token": tok}, timeout=15).json().get("data", {})
+            entry["used_usd"] = round(float(usage.get("totalUsageCreditsUsdBeforeVolumeDiscount", 0)), 2)
+            me = httpx.get(f"{API_ROOT}/users/me", params={"token": tok}, timeout=15).json().get("data", {})
+            entry["limit_usd"] = me.get("plan", {}).get("monthlyUsageCreditsUsd")
+        except Exception:
+            pass
+        out.append(entry)
+    return out
 
 
 def _parse_dt(value):

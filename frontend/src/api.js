@@ -60,6 +60,8 @@ export const api = {
   refineDraft: (draftId, instruction) =>
     request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify({ instruction }) }),
   syncClient: (clientId) => request(`/clients/${clientId}/sync`, { method: "POST" }),
+  dismissPost: (postId) => request(`/posts/${postId}/dismiss`, { method: "POST" }),
+  apifyUsage: () => request("/apify-usage"),
 
   listWatchCreators: (clientId) => request(`/clients/${clientId}/watch-creators`),
   addWatchCreator: (clientId, payload) =>

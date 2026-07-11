@@ -160,6 +160,7 @@ class Post(Base):
 
     relevance_score = Column(Float, nullable=True)
     relevance_reason = Column(Text, default="")
+    dismissed = Column(Boolean, default=False)  # operator removed it from the feed
 
     fetched_at = Column(DateTime, server_default=func.now())
 

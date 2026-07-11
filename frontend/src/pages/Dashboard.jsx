@@ -5,6 +5,8 @@ import PostCard from "../components/PostCard.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import AddClientModal from "../components/AddClientModal.jsx";
 import ManageClientModal from "../components/ManageClientModal.jsx";
+import Toaster from "../components/Toaster.jsx";
+import { toast } from "../toast.js";
 
 export default function Dashboard() {
   const [clients, setClients] = useState([]);
@@ -16,6 +18,11 @@ export default function Dashboard() {
   const [syncError, setSyncError] = useState(null);
   const [showAddClient, setShowAddClient] = useState(false);
   const [showManageClient, setShowManageClient] = useState(false);
+  const [usage, setUsage] = useState([]);
+
+  useEffect(() => {
+    api.apifyUsage().then(setUsage).catch(() => {});
+  }, []);
 
   const loadClients = useCallback(() => {
     return api.listClients().then((data) => {
@@ -56,12 +63,14 @@ export default function Dashboard() {
           await new Promise((r) => setTimeout(r, 15000));
           loadPosts(true);
         }
-        setSyncNote(null);
+        setSyncNote("Finished checking. If nothing new showed up, there may be no new posts yet — try Sync again in a bit.");
+        setTimeout(() => setSyncNote(null), 8000);
       } else {
         loadPosts();
       }
     } catch (e) {
-      setSyncError(e.message || "Sync failed. Please try again.");
+      setSyncError(e.message || "Sync failed.");
+      toast(`Sync failed: ${e.message || "unknown error"}. Please try again.`);
     } finally {
       setSyncing(false);
     }
@@ -147,6 +156,17 @@ export default function Dashboard() {
         {selectedClient &&
           !loading &&
           posts.map((post) => <PostCard key={post.id} post={post} onActioned={loadPosts} />)}
+
+        {usage.length > 0 && (
+          <div style={{ marginTop: 36, paddingTop: 14, borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)" }}>
+            Fetching credit this month:{" "}
+            {usage.map((u, i) => (
+              <span key={u.account}>
+                {i > 0 ? "  ·  " : ""}${(u.used_usd ?? 0).toFixed(2)} / ${u.limit_usd ?? 5}
+              </span>
+            ))}
+          </div>
+        )}
       </main>
 
       <AddClientModal
@@ -168,6 +188,8 @@ export default function Dashboard() {
           loadClients().then((data) => setSelectedClientId(data.length ? data[0].id : null));
         }}
       />
+
+      <Toaster />
     </div>
   );
 }

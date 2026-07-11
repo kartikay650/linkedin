@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft
 from app.models import Draft, Post
+from app.scraper.apify_client import account_usage
 from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
 
 router = APIRouter(tags=["posts"])
@@ -18,13 +19,30 @@ def list_posts_for_client(
     query = (
         db.query(Post)
         .options(joinedload(Post.drafts))
-        .filter(Post.client_id == client_id)
+        .filter(Post.client_id == client_id, Post.dismissed.is_(False))
         .order_by(Post.relevance_score.desc().nullslast(), Post.fetched_at.desc())
     )
     posts = query.all()
     if hide_done:
         posts = [p for p in posts if not any(d.status == "posted" for d in p.drafts)]
     return posts
+
+
+@router.post("/posts/{post_id}/dismiss")
+def dismiss_post(post_id: int, db: Session = Depends(get_db)):
+    """Remove a post from the feed without replying to it."""
+    post = db.get(Post, post_id)
+    if not post:
+        raise HTTPException(404, "post not found")
+    post.dismissed = True
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/apify-usage")
+def apify_usage():
+    """Per-account Apify spend vs monthly credit, for the expense tracker."""
+    return account_usage()
 
 
 @router.post("/posts/{post_id}/draft", response_model=list[DraftOut])

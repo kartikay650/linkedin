@@ -33,6 +33,10 @@ class Settings(BaseSettings):
 
     # Apify. Get the token from apify.com → Settings → Integrations → API token.
     apify_token: str = ""
+    # Optional: multiple Apify account tokens, comma-separated. Calls fail over from
+    # one to the next when an account runs out of monthly credit, so several free
+    # accounts act as one larger balance. Falls back to apify_token if unset.
+    apify_tokens: str = ""
     # Actor id in "username/actor-name" form (the / is auto-converted to ~ for the API).
     # Locked in: harvestapi's no-cookie profile-posts actor — cheapest ($1.50/1k)
     # and 100% run-success in vetting. Input: targetUrls[] + maxPosts.

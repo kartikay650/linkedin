@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api.js";
+import { toast } from "../toast.js";
 import Badge from "./Badge.jsx";
 
 function initials(name) {
@@ -23,6 +24,7 @@ export default function PostCard({ post, onActioned }) {
   const [drafting, setDrafting] = useState(false);
   const [refining, setRefining] = useState(null);
   const [tweak, setTweak] = useState({});
+  const [dismissing, setDismissing] = useState(false);
 
   const pendingDrafts = post.drafts.filter((d) => d.status === "pending");
 
@@ -41,6 +43,8 @@ export default function PostCard({ post, onActioned }) {
       const updated = await api.refineDraft(draft.id, instruction.trim());
       setEditedText((prev) => ({ ...prev, [draft.id]: updated.text }));
       setTweak((prev) => ({ ...prev, [draft.id]: "" }));
+    } catch (e) {
+      toast(`Couldn't tweak that reply: ${e.message}. Try again.`);
     } finally {
       setRefining(null);
     }
@@ -53,8 +57,23 @@ export default function PostCard({ post, onActioned }) {
   };
 
   const handleStatus = async (draft, status) => {
-    await api.updateDraft(draft.id, { status, edited_text: editedText[draft.id] });
-    onActioned();
+    try {
+      await api.updateDraft(draft.id, { status, edited_text: editedText[draft.id] });
+      onActioned();
+    } catch (e) {
+      toast(`Couldn't save that: ${e.message}. Try again.`);
+    }
+  };
+
+  const handleDismiss = async () => {
+    setDismissing(true);
+    try {
+      await api.dismissPost(post.id);
+      onActioned();
+    } catch (e) {
+      toast(`Couldn't dismiss that post: ${e.message}. Try again.`);
+      setDismissing(false);
+    }
   };
 
   const handleDraftReply = async () => {
@@ -62,6 +81,8 @@ export default function PostCard({ post, onActioned }) {
     try {
       await api.draftReply(post.id);
       onActioned();
+    } catch (e) {
+      toast(`Couldn't generate a reply: ${e.message}. Try again in a moment.`);
     } finally {
       setDrafting(false);
     }
@@ -105,14 +126,24 @@ export default function PostCard({ post, onActioned }) {
           </div>
         </div>
 
-        <a
-          href={post.post_url}
-          target="_blank"
-          rel="noreferrer"
-          style={{ fontSize: 13, color: "var(--primary)", whiteSpace: "nowrap", textDecoration: "none" }}
-        >
-          Open post ↗
-        </a>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          <a
+            href={post.post_url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 13, color: "var(--primary)", whiteSpace: "nowrap", textDecoration: "none" }}
+          >
+            Open post ↗
+          </a>
+          <button
+            onClick={handleDismiss}
+            disabled={dismissing}
+            title="Remove this post from the feed"
+            style={{ border: "none", background: "none", fontSize: 13, color: "var(--text-muted)", padding: 0 }}
+          >
+            {dismissing ? "Dismissing…" : "Dismiss"}
+          </button>
+        </div>
       </div>
 
       <p style={{ color: "#374151", fontSize: 14, lineHeight: 1.5, margin: "12px 0" }}>{post.content_snippet}</p>
