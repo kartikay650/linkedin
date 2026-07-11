@@ -59,6 +59,7 @@ class Client(Base):
     # human-reviewed. Feeds the relevance scorer and the reply drafter. All free
     # text so a person can edit each section directly (human-in-the-loop).
     voice_guide = Column(Text, default="")        # how they write: tone, style, do's/don'ts
+    voice_samples = Column(Text, default="")       # verbatim example sentences in their real voice (few-shot anchor)
     viewpoints = Column(Text, default="")          # their actual opinions/stances on topics
     audience = Column(Text, default="")            # who they're reaching + that audience's pain points
     key_messages = Column(Text, default="")        # core positioning statements / proof points

@@ -12,6 +12,7 @@ class ClientOut(BaseModel):
     tone_profile: str
     topics: list[str]
     voice_guide: Optional[str] = None
+    voice_samples: Optional[str] = None
     viewpoints: Optional[str] = None
     audience: Optional[str] = None
     key_messages: Optional[str] = None
@@ -30,6 +31,7 @@ class ClientCreate(BaseModel):
     topics: list[str] = []
     # Optional structured brand fields (set when created from an extracted doc).
     voice_guide: Optional[str] = None
+    voice_samples: Optional[str] = None
     viewpoints: Optional[str] = None
     audience: Optional[str] = None
     key_messages: Optional[str] = None
@@ -44,6 +46,7 @@ class ClientUpdate(BaseModel):
     tone_profile: Optional[str] = None
     topics: Optional[list[str]] = None
     voice_guide: Optional[str] = None
+    voice_samples: Optional[str] = None
     viewpoints: Optional[str] = None
     audience: Optional[str] = None
     key_messages: Optional[str] = None
@@ -74,6 +77,7 @@ class BrandProfileOut(BaseModel):
     """Proposed brand profile extracted from a client's strategy doc(s). Never
     persisted directly — a human reviews/edits each section, then PATCHes the client."""
     voice_guide: str = ""
+    voice_samples: str = ""
     viewpoints: str = ""
     audience: str = ""
     key_messages: str = ""
@@ -131,6 +135,10 @@ class DraftOut(BaseModel):
 class DraftUpdate(BaseModel):
     edited_text: Optional[str] = None
     status: Optional[str] = None  # "approved" | "rejected" | "posted"
+
+
+class RefineDraftRequest(BaseModel):
+    instruction: str
 
 
 class PostWithDrafts(PostOut):

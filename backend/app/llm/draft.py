@@ -7,49 +7,73 @@ from app.models import Client, Post
 
 _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-PROMPT = """Draft {count} short LinkedIn comment replies for this client to post on the post below.
+PROMPT = """You are writing LinkedIn comment replies AS this specific person. The single most important thing: \
+the reply must be indistinguishable from something they wrote themselves. Not "in their style" — actually theirs.
 
-=== CLIENT BRAND PROFILE ===
+=== HOW THIS PERSON ACTUALLY WRITES (study this hard) ===
+{voice}
+=== END ===
+
 {brand}
-=== END BRAND PROFILE ===
 
-Post author: {author}
-Post content:
+The post they're replying to:
+Author: {author}
 \"\"\"
 {content}
 \"\"\"
 
-HARD RULES (never violate, even if a more natural reply would):
-- Obey the client's CTA rules exactly. Never write a call-to-action the rules prohibit (for example, never push a consumer/retail purchase if the rules say business/clinical only).
-- Obey every rule in the guardrails section. If a natural reply would require content the guardrails restrict — a patient case study, an un-cited claim, a sensitive personal story, an off-limits subject — do NOT write it. Produce a reply that stays inside the bounds instead.
-- Never fabricate case studies, patient stories, personal anecdotes, statistics, study results, or credentials. Only state specifics that appear in the brand profile above or in the post itself. When in doubt, make the point without the specific.
-- Take a position drawn from the client's actual viewpoints above; never invent an opinion they haven't expressed.
+Write {count} distinct reply options. Each must:
+- Sound exactly like the samples above — same sentence length, same rhythm, same vocabulary level, same amount of hedging or bluntness. If they write short and punchy, you write short and punchy. If they use a specific word, use it.
+- Take a real position from their viewpoints. React to a specific detail in the post (a mechanism, a number, a claim that's off), not a generic reaction.
+- Add genuine insight, never "Great post" or "So true".
+- Be 1 to 3 sentences.
 
-Write like a real scientist/clinician typing a quick comment, not like an AI assistant. Specifically avoid:
-- Em dashes as a crutch for every sentence — use a period or comma like a person actually would.
-- Rule-of-three lists ("X, Y, and Z") — real comments are lopsided, not neatly balanced.
-- Inflated or promotional language: "game-changing," "unlock," "elevate," "the future of," "exciting."
-- Vague hand-waving attribution: "studies show," "many experts believe," "it's well known that." If you reference evidence, be specific (a mechanism, a number, a named confound) or don't reference it at all.
-- Filler openers: "It's worth noting that," "Interestingly," "In today's world."
-- Hedging every claim into mush. A real expert commits to a specific, falsifiable point.
+HARD RULES (never break):
+- Obey the CTA rules. Never write a call-to-action they wouldn't (e.g. no consumer/retail push if the rules say clinical/B2B only).
+- Obey the guardrails. If a natural reply would need a patient case study, an un-cited claim, a sensitive story, or an off-limits subject, do NOT write it — make the point within bounds instead.
+- Never invent statistics, study results, case studies, or credentials. Only use specifics from the brand profile or the post itself.
 
-What TO do:
-- Lead with the actual point, no windup.
-- Reference one concrete, specific detail from the post's content — a mechanism, a missing control, a number that seems off — not a generic reaction to it.
-- Sound like a specific person with a specific stance, not a balanced summary of "both sides."
-- Add genuine insight — never generic praise like "Great post!" or "So true!".
-- Short: 1-3 sentences. No emoji unless the client's tone profile explicitly uses them.
-- The goal is to make readers curious enough to click through to the client's profile, not to summarize the post.
+NEVER write like AI. Banned: em dashes as connectors, rule-of-three lists ("X, Y, and Z"), "game-changing / unlock / elevate / the future of / crucial / pivotal / delve / testament / underscore", "studies show / experts believe / it's well known", filler openers ("It's worth noting", "Interestingly"), and hedging everything into mush. Real people are lopsided and commit to a point.
 
-Respond ONLY with JSON: {{"drafts": ["draft one", "draft two", ...]}}"""
+Respond ONLY with JSON: {{"drafts": ["option one", "option two", ...]}}"""
+
+REFINE_PROMPT = """Revise this LinkedIn comment, written AS this person, following the operator's instruction. \
+Keep it unmistakably in their voice.
+
+=== HOW THIS PERSON ACTUALLY WRITES ===
+{voice}
+=== END ===
+
+The post being replied to:
+\"\"\"
+{content}
+\"\"\"
+
+Current reply:
+\"\"\"
+{current}
+\"\"\"
+
+Operator's instruction: {instruction}
+
+Rewrite the reply to follow that instruction while staying in their exact voice. No em dashes, no rule-of-three, \
+no promotional or AI words, no invented facts. Commit to a specific point. Respond ONLY with JSON: {{"draft": "..."}}"""
+
+
+def _voice_block(client: Client) -> str:
+    """The person's real voice: verbatim samples first (strongest signal), then the
+    written description. Falls back to the legacy tone_profile."""
+    parts = []
+    if (client.voice_samples or "").strip():
+        parts.append("Verbatim examples of their own words:\n" + client.voice_samples.strip())
+    guide = (client.voice_guide or client.tone_profile or "").strip()
+    if guide:
+        parts.append("How they write:\n" + guide)
+    return "\n\n".join(parts) if parts else "Direct, plain, specific. No fluff."
 
 
 def _brand_block(client: Client) -> str:
-    """Assemble the client's brand profile into a labelled block for the prompt,
-    using whichever structured sections are filled in and falling back to the
-    legacy tone_profile for voice when voice_guide is empty."""
     sections = [
-        ("Voice / how they write", client.voice_guide or client.tone_profile),
         ("Their viewpoints / stances", client.viewpoints),
         ("Audience they're speaking to", client.audience),
         ("Key messages / proof points", client.key_messages),
@@ -57,17 +81,18 @@ def _brand_block(client: Client) -> str:
         ("Guardrails (hard rules)", client.guardrails),
     ]
     parts = [f"{label}:\n{value.strip()}" for label, value in sections if value and value.strip()]
-    return "\n\n".join(parts) if parts else "Professional, direct, no fluff."
+    return ("=== BRAND CONTEXT ===\n" + "\n\n".join(parts) + "\n=== END ===") if parts else ""
 
 
 def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
     message = _client.messages.create(
         model=settings.draft_model,
-        max_tokens=500,
+        max_tokens=800,
         messages=[{
             "role": "user",
             "content": PROMPT.format(
                 count=count,
+                voice=_voice_block(client),
                 brand=_brand_block(client),
                 author=post.author_name,
                 content=post.content_snippet,
@@ -79,6 +104,28 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
         drafts = list(data["drafts"])
     except (ValueError, KeyError):
         return []
+    return humanize_comments(drafts, _voice_block(client))
 
-    # Second pass: strip AI tells and match the client's voice before the human sees it.
-    return humanize_comments(drafts, client.voice_guide or client.tone_profile or "")
+
+def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:
+    """Revise a single draft per an operator instruction (e.g. 'shorter', 'more personal')."""
+    message = _client.messages.create(
+        model=settings.draft_model,
+        max_tokens=800,
+        messages=[{
+            "role": "user",
+            "content": REFINE_PROMPT.format(
+                voice=_voice_block(client),
+                content=post.content_snippet,
+                current=current_text,
+                instruction=instruction,
+            ),
+        }],
+    )
+    try:
+        data = extract_json(message)
+        revised = str(data["draft"])
+    except (ValueError, KeyError):
+        return current_text
+    out = humanize_comments([revised], _voice_block(client))
+    return out[0] if out else revised

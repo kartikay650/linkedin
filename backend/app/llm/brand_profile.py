@@ -25,7 +25,12 @@ Produce these sections:
 - specialty: their professional specialty/field in a few words (e.g. "Cardiology", "Longevity & preventive medicine").
 
 - voice_guide: How this person writes. Tone, register, sentence rhythm, recurring habits, explicit do's and \
-don'ts, and a few short sample phrasings drawn from the material. This is for imitating their voice.
+don'ts. This is a description for imitating their voice.
+
+- voice_samples: 5 to 8 VERBATIM sentences or short passages from the material that best capture how this person \
+actually talks or writes — their real words, copied exactly, not paraphrased. Prefer first-person statements and \
+anything with a distinctive turn of phrase, opinion, or rhythm. Separate each with a newline. These are used as \
+direct style examples for the reply writer, so authenticity matters more than polish.
 
 - viewpoints: Their actual stances and opinions on topics in their field — the specific, sometimes \
 contrarian positions they hold (e.g. what they think is overhyped, what the mainstream gets wrong). A reply \
@@ -53,8 +58,8 @@ in this document]" list — match each person to their profile URL from that lis
 prefer them over any guess. Leave profile_url empty only if there's genuinely no matching link.
 
 Respond ONLY with JSON:
-{{"name": "...", "specialty": "...", "voice_guide": "...", "viewpoints": "...", "audience": "...", \
-"key_messages": "...", "cta_rules": "...", "guardrails": "...", "topics": ["..."], \
+{{"name": "...", "specialty": "...", "voice_guide": "...", "voice_samples": "...", "viewpoints": "...", \
+"audience": "...", "key_messages": "...", "cta_rules": "...", "guardrails": "...", "topics": ["..."], \
 "suggested_creators": [{{"name": "...", "profile_url": "...", "reason": "..."}}]}}"""
 
 
@@ -103,6 +108,7 @@ def extract_brand_profile(client: Client, documents: list[ClientDocument]) -> di
         "name": _s("name"),
         "specialty": _s("specialty"),
         "voice_guide": _s("voice_guide"),
+        "voice_samples": _s("voice_samples"),
         "viewpoints": _s("viewpoints"),
         "audience": _s("audience"),
         "key_messages": _s("key_messages"),

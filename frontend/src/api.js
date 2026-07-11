@@ -57,6 +57,8 @@ export const api = {
   updateDraft: (draftId, payload) =>
     request(`/drafts/${draftId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   draftReply: (postId) => request(`/posts/${postId}/draft`, { method: "POST" }),
+  refineDraft: (draftId, instruction) =>
+    request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify({ instruction }) }),
   syncClient: (clientId) => request(`/clients/${clientId}/sync`, { method: "POST" }),
 
   listWatchCreators: (clientId) => request(`/clients/${clientId}/watch-creators`),

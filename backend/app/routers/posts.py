@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_db
-from app.llm.draft import generate_drafts
+from app.llm.draft import generate_drafts, refine_draft
 from app.models import Draft, Post
-from app.schemas import DraftOut, DraftUpdate, PostWithDrafts
+from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
 
 router = APIRouter(tags=["posts"])
 
@@ -45,6 +45,23 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     for d in drafts:
         db.refresh(d)
     return drafts
+
+
+@router.post("/drafts/{draft_id}/refine", response_model=DraftOut)
+def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session = Depends(get_db)):
+    """Rewrite a draft per an operator instruction (e.g. 'make it shorter', 'more
+    personal', 'add a question'), keeping it in the client's voice."""
+    draft = db.get(Draft, draft_id)
+    if not draft:
+        raise HTTPException(404, "draft not found")
+    post = db.get(Post, draft.post_id)
+    current = draft.edited_text or draft.text
+    revised = refine_draft(post.client, post, current, payload.instruction)
+    draft.text = revised
+    draft.edited_text = None  # revised text supersedes prior manual edits
+    db.commit()
+    db.refresh(draft)
+    return draft
 
 
 @router.patch("/drafts/{draft_id}", response_model=None)

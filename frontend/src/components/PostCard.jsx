@@ -21,8 +21,30 @@ export default function PostCard({ post, onActioned }) {
   const [editedText, setEditedText] = useState({});
   const [copiedId, setCopiedId] = useState(null);
   const [drafting, setDrafting] = useState(false);
+  const [refining, setRefining] = useState(null);
+  const [tweak, setTweak] = useState({});
 
   const pendingDrafts = post.drafts.filter((d) => d.status === "pending");
+
+  const TWEAKS = [
+    ["Shorter", "make it shorter"],
+    ["Longer", "make it a little longer"],
+    ["More personal", "make it more personal, in her own voice"],
+    ["Punchier", "make it punchier and more direct"],
+    ["Add a question", "end with a genuine question"],
+  ];
+
+  const handleRefine = async (draft, instruction) => {
+    if (!instruction || !instruction.trim()) return;
+    setRefining(draft.id);
+    try {
+      const updated = await api.refineDraft(draft.id, instruction.trim());
+      setEditedText((prev) => ({ ...prev, [draft.id]: updated.text }));
+      setTweak((prev) => ({ ...prev, [draft.id]: "" }));
+    } finally {
+      setRefining(null);
+    }
+  };
 
   const handleCopy = async (draft) => {
     await navigator.clipboard.writeText(editedText[draft.id] ?? draft.text);
@@ -144,10 +166,51 @@ export default function PostCard({ post, onActioned }) {
                 borderRadius: 6,
                 padding: 8,
                 resize: "vertical",
+                fontSize: 14,
+                lineHeight: 1.5,
+                opacity: refining === draft.id ? 0.6 : 1,
               }}
-              defaultValue={draft.text}
+              value={editedText[draft.id] ?? draft.text}
+              disabled={refining === draft.id}
               onChange={(e) => setEditedText((prev) => ({ ...prev, [draft.id]: e.target.value }))}
             />
+
+            {/* Tweak row: quick chips + free-text instruction */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+              {TWEAKS.map(([label, instruction]) => (
+                <button
+                  key={label}
+                  disabled={refining === draft.id}
+                  onClick={() => handleRefine(draft, instruction)}
+                  style={{
+                    padding: "4px 10px", borderRadius: 999, border: "1px solid var(--border)",
+                    background: "var(--surface)", fontSize: 12, color: "var(--text-muted)",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <input
+                placeholder="or tell it how to change…"
+                value={tweak[draft.id] || ""}
+                disabled={refining === draft.id}
+                onChange={(e) => setTweak((p) => ({ ...p, [draft.id]: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === "Enter") handleRefine(draft, tweak[draft.id]); }}
+                style={{ flex: 1, minWidth: 140, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, fontFamily: "inherit" }}
+              />
+              <button
+                onClick={() => handleRefine(draft, tweak[draft.id])}
+                disabled={refining === draft.id || !(tweak[draft.id] || "").trim()}
+                style={{
+                  padding: "6px 12px", borderRadius: 8, border: "none",
+                  background: "var(--primary)", color: "#fff", fontSize: 13, fontWeight: 600,
+                  opacity: refining === draft.id || !(tweak[draft.id] || "").trim() ? 0.55 : 1,
+                }}
+              >
+                {refining === draft.id ? "Tweaking…" : "Tweak"}
+              </button>
+            </div>
+
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button
                 onClick={() => handleCopy(draft)}

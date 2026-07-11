@@ -5,7 +5,7 @@ import { api } from "../api";
 const STEPS = ["Documents", "Identity", "Voice", "Details"];
 
 const empty = {
-  name: "", specialty: "", linkedinUrl: "", tone: "", topics: "",
+  name: "", specialty: "", linkedinUrl: "", tone: "", voiceSamples: "", topics: "",
   viewpoints: "", audience: "", keyMessages: "", ctaRules: "", guardrails: "",
 };
 
@@ -48,7 +48,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       const p = await api.extractBrand(combined);
       setF({
         name: p.name || "", specialty: p.specialty || "",
-        linkedinUrl: "", tone: p.voice_guide || "",
+        linkedinUrl: "", tone: p.voice_guide || "", voiceSamples: p.voice_samples || "",
         topics: Array.isArray(p.topics) ? p.topics.join(", ") : "",
         viewpoints: p.viewpoints || "", audience: p.audience || "",
         keyMessages: p.key_messages || "", ctaRules: p.cta_rules || "", guardrails: p.guardrails || "",
@@ -79,7 +79,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         name: f.name.trim(), specialty: f.specialty.trim(),
         linkedin_url: f.linkedinUrl.trim() || null,
         topics: f.topics.split(",").map((t) => t.trim()).filter(Boolean),
-        tone_profile: f.tone.trim(), voice_guide: f.tone.trim(),
+        tone_profile: f.tone.trim(), voice_guide: f.tone.trim(), voice_samples: f.voiceSamples,
         viewpoints: f.viewpoints, audience: f.audience,
         key_messages: f.keyMessages, cta_rules: f.ctaRules, guardrails: f.guardrails,
       });

@@ -7,6 +7,7 @@ import { sectionStyle, sectionTitleStyle, smallButtonStyle, inputStyle } from ".
 // the client's uploaded strategy docs, then human-reviewed field-by-field before saving.
 const FIELDS = [
   ["voice_guide", "Voice & how they write", "Tone, style, do's and don'ts, sample phrasings"],
+  ["voice_samples", "Voice samples (their real words)", "Verbatim lines that make replies sound like them"],
   ["viewpoints", "Viewpoints / stances", "Their actual opinions, used to take real positions in replies"],
   ["audience", "Audience & pain points", "Who they're reaching, used to judge which posts are worth engaging"],
   ["key_messages", "Key messages / proof points", "Core positioning they want to reinforce"],
