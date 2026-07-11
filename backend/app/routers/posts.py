@@ -35,16 +35,21 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     if not post:
         raise HTTPException(404, "post not found")
 
-    texts = generate_drafts(post.client, post, count=2)
+    texts = generate_drafts(post.client, post, count=1)
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
-    drafts = [Draft(post_id=post.id, variant_index=i, text=text) for i, text in enumerate(texts)]
-    db.add_all(drafts)
+    # Replace any existing non-posted drafts so regenerating never stacks up copies.
+    for d in list(post.drafts):
+        if d.status != "posted":
+            db.delete(d)
+    db.flush()
+
+    draft = Draft(post_id=post.id, variant_index=0, text=texts[0])
+    db.add(draft)
     db.commit()
-    for d in drafts:
-        db.refresh(d)
-    return drafts
+    db.refresh(draft)
+    return [draft]
 
 
 @router.post("/drafts/{draft_id}/refine", response_model=DraftOut)

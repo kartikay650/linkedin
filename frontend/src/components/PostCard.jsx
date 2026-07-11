@@ -226,6 +226,21 @@ export default function PostCard({ post, onActioned }) {
                 {copiedId === draft.id ? "Copied ✓" : "Copy"}
               </button>
               <button
+                onClick={handleDraftReply}
+                disabled={drafting || refining === draft.id}
+                title="Generate a fresh reply"
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border)",
+                  background: "var(--surface)",
+                  fontSize: 13,
+                  fontWeight: 500,
+                }}
+              >
+                {drafting ? "Regenerating…" : "Regenerate"}
+              </button>
+              <button
                 onClick={() => handleStatus(draft, "posted")}
                 style={{
                   padding: "6px 12px",
