@@ -146,22 +146,29 @@ Respond ONLY with JSON:
 
 
 def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
-    """Web-verify the flagged (red) claims. Explicit, on-demand — may take
-    10-30s, so it is never called inside the draft request."""
+    """Web-verify the flagged (red) claims. Explicit, on-demand.
+
+    A web-search agentic loop is unbounded, but the serverless function has a
+    hard 60s ceiling — so cap the work (at most 3 claims, few searches) and give
+    the API call a 45s budget. If it runs long, we return 'unconfirmed' rather
+    than letting the whole request die at the edge."""
     if not flagged:
         return []
+    flagged = flagged[:3]
     claims_block = "\n".join(f"- {c}" for c in flagged)
+    timed_out = [{"claim": c, "verdict": "unconfirmed", "source_url": "",
+                  "note": "couldn't confirm in time — please check manually"} for c in flagged]
     try:
-        message = _client.messages.create(
+        message = _client.with_options(timeout=45.0, max_retries=0).messages.create(
             model=settings.draft_model,
-            max_tokens=2000,
-            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}],
+            max_tokens=1500,
+            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}],
             messages=[{
                 "role": "user",
                 "content": VERIFY_PROMPT.format(reply=reply, claims=claims_block),
             }],
         )
         data = _json_from_all_text(message)
-        return list(data.get("results", []))
+        return list(data.get("results", [])) or timed_out
     except (ValueError, KeyError, anthropic.AnthropicError):
-        return [{"claim": c, "verdict": "unconfirmed", "source_url": "", "note": "verification failed — please check manually"} for c in flagged]
+        return timed_out
