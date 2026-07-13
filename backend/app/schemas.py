@@ -114,6 +114,7 @@ class PostOut(BaseModel):
     engagement: dict
     relevance_score: Optional[float]
     relevance_reason: str
+    summary: str = ""
     fetched_at: datetime
 
     class Config:

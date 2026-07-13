@@ -25,15 +25,19 @@ export default function PostCard({ post, onActioned }) {
   const [refining, setRefining] = useState(null);
   const [tweak, setTweak] = useState({});
   const [dismissing, setDismissing] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
-  const pendingDrafts = post.drafts.filter((d) => d.status === "pending");
+  // Drafts still being worked (drafted or scientist-approved, not yet posted/rejected).
+  const workingDrafts = post.drafts.filter((d) => d.status === "pending" || d.status === "approved");
+  const postedDraft = post.drafts.find((d) => d.status === "posted");
 
   const TWEAKS = [
-    ["Shorter", "make it shorter"],
-    ["Longer", "make it a little longer"],
-    ["More personal", "make it more personal, in her own voice"],
-    ["Punchier", "make it punchier and more direct"],
-    ["Add a question", "end with a genuine question"],
+    ["Shorter", "make it shorter, one or two sentences at most"],
+    ["More personal", "make it more personal and human, in her own first-person voice"],
+    ["More neutral", "make it more neutral and less opinionated; make the point without pushing a strong personal opinion"],
+    ["More scientific", "make it more scientific and clinical in tone: precise, evidence-minded, measured"],
+    ["More authoritative", "make it more authoritative, peer-to-peer between experts; never congratulatory, never 'well done' or 'great post'"],
+    ["Remove opinion", "remove personal opinion and any unverified claim; keep only what reflects the post itself and facts grounded in her own material"],
   ];
 
   const handleRefine = async (draft, instruction) => {
@@ -54,6 +58,13 @@ export default function PostCard({ post, onActioned }) {
     await navigator.clipboard.writeText(editedText[draft.id] ?? draft.text);
     setCopiedId(draft.id);
     setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const handleCopyLink = async () => {
+    if (!post.post_url) return;
+    await navigator.clipboard.writeText(post.post_url);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 1500);
   };
 
   const handleStatus = async (draft, status) => {
@@ -136,6 +147,13 @@ export default function PostCard({ post, onActioned }) {
             Open post ↗
           </a>
           <button
+            onClick={handleCopyLink}
+            title="Copy this post's link to paste where the client is logged in"
+            style={{ border: "none", background: "none", fontSize: 13, color: "var(--text-muted)", padding: 0, whiteSpace: "nowrap" }}
+          >
+            {linkCopied ? "Link copied ✓" : "Copy link"}
+          </button>
+          <button
             onClick={handleDismiss}
             disabled={dismissing}
             title="Remove this post from the feed"
@@ -146,12 +164,23 @@ export default function PostCard({ post, onActioned }) {
         </div>
       </div>
 
-      <p style={{ color: "#374151", fontSize: 14, lineHeight: 1.5, margin: "12px 0" }}>{post.content_snippet}</p>
+      {post.summary && (
+        <p style={{ color: "#111827", fontSize: 13, fontWeight: 500, lineHeight: 1.5, margin: "12px 0 4px" }}>
+          {post.summary}
+        </p>
+      )}
+      <p style={{ color: "#6b7280", fontSize: 13, lineHeight: 1.5, margin: post.summary ? "0 0 12px" : "12px 0" }}>
+        {post.content_snippet}
+      </p>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center" }}>
         <Badge tone={relevanceTone(post.relevance_score ?? 0)}>
           relevance {Math.round((post.relevance_score ?? 0) * 10)}/10
         </Badge>
+        {postedDraft && <Badge tone="success">Posted</Badge>}
+        {!postedDraft && workingDrafts.some((d) => d.status === "approved") && (
+          <Badge tone="primary">Approved for posting</Badge>
+        )}
       </div>
       {post.relevance_reason && (
         <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 14, marginTop: -8 }}>
@@ -159,7 +188,13 @@ export default function PostCard({ post, onActioned }) {
         </div>
       )}
 
-      {pendingDrafts.length === 0 && (
+      {postedDraft && workingDrafts.length === 0 && (
+        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.5, color: "#374151" }}>
+          {postedDraft.edited_text || postedDraft.text}
+        </div>
+      )}
+
+      {workingDrafts.length === 0 && !postedDraft && (
         <button
           onClick={handleDraftReply}
           disabled={drafting}
@@ -177,7 +212,7 @@ export default function PostCard({ post, onActioned }) {
         </button>
       )}
 
-      {pendingDrafts
+      {workingDrafts
         .map((draft) => (
           <div
             key={draft.id}
@@ -271,6 +306,23 @@ export default function PostCard({ post, onActioned }) {
               >
                 {drafting ? "Regenerating…" : "Regenerate"}
               </button>
+              {draft.status !== "approved" && (
+                <button
+                  onClick={() => handleStatus(draft, "approved")}
+                  title="Scientist review passed — ready for an account manager to post"
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    border: "1px solid var(--success)",
+                    background: "var(--success-bg)",
+                    color: "var(--success)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  Approve
+                </button>
+              )}
               <button
                 onClick={() => handleStatus(draft, "posted")}
                 style={{

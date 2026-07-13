@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [showAddClient, setShowAddClient] = useState(false);
   const [showManageClient, setShowManageClient] = useState(false);
   const [usage, setUsage] = useState([]);
+  const [view, setView] = useState("active");
 
   useEffect(() => {
     api.apifyUsage().then(setUsage).catch(() => {});
@@ -41,10 +42,10 @@ export default function Dashboard() {
     if (!selectedClientId) return;
     if (!silent) setLoading(true);
     api
-      .listPosts(selectedClientId)
+      .listPosts(selectedClientId, view)
       .then(setPosts)
       .finally(() => { if (!silent) setLoading(false); });
-  }, [selectedClientId]);
+  }, [selectedClientId, view]);
 
   useEffect(() => {
     loadPosts();
@@ -138,6 +139,33 @@ export default function Dashboard() {
               </div>
             </div>
           </header>
+        )}
+
+        {selectedClient && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
+            {[
+              ["active", "Queue"],
+              ["approved", "Approved"],
+              ["posted", "Posted"],
+              ["all", "All"],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setView(key)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  border: "1px solid var(--border)",
+                  background: view === key ? "var(--primary)" : "var(--surface)",
+                  color: view === key ? "#fff" : "var(--text-muted)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         )}
 
         {!selectedClient && (

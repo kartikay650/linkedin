@@ -31,10 +31,15 @@ Post content:
 Score relevance from 0.0 to 1.0. Reward posts where (a) the topic genuinely fits the client's expertise,
 (b) the client could add value FOR THE AUDIENCE above — not just react generically, and (c) the client has
 a specific viewpoint that would make the comment substantive. Penalise generic filler and posts where a
-comment would just be polite noise. Respond ONLY with JSON: {{"score": float, "reason": "one sentence"}}"""
+comment would just be polite noise.
+
+Also write a "summary": one plain sentence saying what the post is actually about, so a reviewer can decide
+whether to open it without reading the whole thing. No hype, no adjectives, just the gist.
+
+Respond ONLY with JSON: {{"score": float, "reason": "one sentence", "summary": "one sentence"}}"""
 
 
-def score_post(client: Client, post: Post) -> tuple[float, str]:
+def score_post(client: Client, post: Post) -> tuple[float, str, str]:
     message = _client.messages.create(
         model=settings.relevance_model,
         max_tokens=200,
@@ -52,6 +57,6 @@ def score_post(client: Client, post: Post) -> tuple[float, str]:
     )
     try:
         data = extract_json(message)
-        return float(data["score"]), str(data["reason"])
+        return float(data["score"]), str(data["reason"]), str(data.get("summary", ""))
     except (ValueError, KeyError):
-        return 0.0, "relevance scoring failed to parse a response"
+        return 0.0, "relevance scoring failed to parse a response", ""

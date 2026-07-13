@@ -13,7 +13,7 @@ router = APIRouter(tags=["posts"])
 @router.get("/clients/{client_id}/posts", response_model=list[PostWithDrafts])
 def list_posts_for_client(
     client_id: int,
-    hide_done: bool = Query(True, description="Hide posts that already have a posted reply"),
+    view: str = Query("active", description="active | needs_review | approved | posted | all"),
     db: Session = Depends(get_db),
 ):
     query = (
@@ -23,8 +23,22 @@ def list_posts_for_client(
         .order_by(Post.relevance_score.desc().nullslast(), Post.fetched_at.desc())
     )
     posts = query.all()
-    if hide_done:
-        posts = [p for p in posts if not any(d.status == "posted" for d in p.drafts)]
+
+    def has(post, status):
+        return any(d.status == status for d in post.drafts)
+
+    if view == "posted":
+        posts = [p for p in posts if has(p, "posted")]
+    elif view == "approved":
+        # Scientist-approved and waiting to be posted (not yet live).
+        posts = [p for p in posts if has(p, "approved") and not has(p, "posted")]
+    elif view == "needs_review":
+        # Nothing approved or posted yet — still needs a human to work it.
+        posts = [p for p in posts if not has(p, "approved") and not has(p, "posted")]
+    elif view == "all":
+        pass
+    else:  # "active" — the working queue: hide anything already posted/live
+        posts = [p for p in posts if not has(p, "posted")]
     return posts
 
 

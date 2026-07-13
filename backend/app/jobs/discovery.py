@@ -87,7 +87,8 @@ def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -
 
     # Relevance is scored so the human can sort/filter; the reply text itself is
     # never generated until a person clicks "Draft reply". No auto-drafting here.
-    score, reason = score_post(client, post)
+    score, reason, summary = score_post(client, post)
     post.relevance_score = score
     post.relevance_reason = reason
+    post.summary = summary
     db.commit()
