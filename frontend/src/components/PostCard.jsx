@@ -26,6 +26,7 @@ export default function PostCard({ post, onActioned }) {
   const [tweak, setTweak] = useState({});
   const [dismissing, setDismissing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [verifying, setVerifying] = useState(null);
 
   // Drafts still being worked (drafted or scientist-approved, not yet posted/rejected).
   const workingDrafts = post.drafts.filter((d) => d.status === "pending" || d.status === "approved");
@@ -84,6 +85,18 @@ export default function PostCard({ post, onActioned }) {
     } catch (e) {
       toast(`Couldn't dismiss that post: ${e.message}. Try again.`);
       setDismissing(false);
+    }
+  };
+
+  const handleVerify = async (draft) => {
+    setVerifying(draft.id);
+    try {
+      await api.verifyClaims(draft.id);
+      onActioned();
+    } catch (e) {
+      toast(`Couldn't verify the claims: ${e.message}. Try again.`);
+    } finally {
+      setVerifying(null);
     }
   };
 
@@ -212,8 +225,7 @@ export default function PostCard({ post, onActioned }) {
         </button>
       )}
 
-      {workingDrafts
-        .map((draft) => (
+      {workingDrafts.map((draft) => (
           <div
             key={draft.id}
             style={{
@@ -276,6 +288,12 @@ export default function PostCard({ post, onActioned }) {
                 {refining === draft.id ? "Tweaking…" : "Tweak"}
               </button>
             </div>
+
+            <ProvenancePanel
+              segments={draft.provenance}
+              verifying={verifying === draft.id}
+              onVerify={() => handleVerify(draft)}
+            />
 
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button
@@ -355,6 +373,72 @@ export default function PostCard({ post, onActioned }) {
             </div>
           </div>
         ))}
+    </div>
+  );
+}
+
+const LEVEL_META = {
+  grounded: { dot: "#12b76a", label: "From her material" },
+  general: { dot: "#98a2b3", label: "General" },
+  unverified: { dot: "#f79009", label: "Unverified — check before posting" },
+  contradicted: { dot: "#f04438", label: "Contradicted — fix before posting" },
+};
+
+// Clinical-safety trace: shows where each claim in the reply comes from, and
+// offers a web check for anything the AI asserted that isn't backed by her material.
+function ProvenancePanel({ segments, verifying, onVerify }) {
+  if (!Array.isArray(segments) || segments.length === 0) return null;
+  const flagged = segments.filter((s) => s.level === "unverified" || s.level === "contradicted");
+  const grounded = segments.filter((s) => s.level === "grounded");
+  const hasUnverified = segments.some((s) => s.level === "unverified");
+  if (flagged.length === 0 && grounded.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>
+        Where this comes from
+      </div>
+      {segments
+        .filter((s) => s.level !== "general")
+        .map((s, i) => {
+          const meta = LEVEL_META[s.level] || LEVEL_META.general;
+          return (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.dot, marginTop: 5, flexShrink: 0 }} />
+              <div style={{ fontSize: 12, lineHeight: 1.45 }}>
+                <span style={{ color: "#374151" }}>"{s.text.trim()}"</span>
+                <span style={{ color: meta.dot, fontWeight: 600 }}> — {meta.label}</span>
+                {s.note && <span style={{ color: "var(--text-muted)" }}> · {s.note}</span>}
+                {s.source_url && (
+                  <>
+                    {" "}
+                    <a href={s.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
+                      source ↗
+                    </a>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      {hasUnverified && (
+        <button
+          onClick={onVerify}
+          disabled={verifying}
+          style={{
+            marginTop: 6,
+            padding: "5px 11px",
+            borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "var(--bg)",
+            fontSize: 12,
+            fontWeight: 600,
+            color: "var(--text-muted)",
+          }}
+        >
+          {verifying ? "Checking the web…" : "Verify claims on the web"}
+        </button>
+      )}
     </div>
   );
 }

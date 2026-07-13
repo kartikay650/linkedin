@@ -127,6 +127,7 @@ class DraftOut(BaseModel):
     variant_index: int
     text: str
     edited_text: Optional[str]
+    provenance: list[dict] = []
     status: str
 
     class Config:

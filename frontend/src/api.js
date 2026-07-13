@@ -59,6 +59,7 @@ export const api = {
   draftReply: (postId) => request(`/posts/${postId}/draft`, { method: "POST" }),
   refineDraft: (draftId, instruction) =>
     request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify({ instruction }) }),
+  verifyClaims: (draftId) => request(`/drafts/${draftId}/verify-claims`, { method: "POST" }),
   syncClient: (clientId) => request(`/clients/${clientId}/sync`, { method: "POST" }),
   dismissPost: (postId) => request(`/posts/${postId}/dismiss`, { method: "POST" }),
   apifyUsage: () => request("/apify-usage"),

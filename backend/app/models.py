@@ -177,6 +177,8 @@ class Draft(Base):
     variant_index = Column(Integer, default=0)
     text = Column(Text, nullable=False)
     edited_text = Column(Text, nullable=True)
+    # Clinical-safety trace: [{text, level: grounded|general|unverified, note, source_url}]
+    provenance = Column(JSON, default=list)
     status = Column(Enum(DraftStatus), default=DraftStatus.pending)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
