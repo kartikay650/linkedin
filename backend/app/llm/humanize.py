@@ -34,8 +34,16 @@ Remove these AI tells (from the "signs of AI writing" guide):
 - Superficial "-ing" tails that fake depth ("highlighting the importance of...", "reflecting a broader...").
 - Every sentence the same length. Vary the rhythm; a fragment is fine.
 
+Also remove these LinkedIn-comment tells specifically:
+- Exclamation points. No exclamation points at all.
+- The author's name at the start. Names go at the end after a comma, only when natural.
+- Praise / summary openers: "Great post", "Great point", "Love this", "Insightful", "Absolutely", "Couldn't agree more", "What stood out to me is", "You make a great point about".
+- Evaluating how the post was written ("the way you've framed this", "you've articulated this", "your observation about X"). React to the idea, not the author's performance.
+- The nominalized-insight formula: [abstract noun phrase] + is + [meta-claim about what most people or frameworks miss]. Say the point plainly instead.
+- "Reminder" framing ("powerful reminder", "serves as a reminder"), rarity flattery ("rare to see", "so refreshing"), abstract gratitude ("thanks for these valuable insights").
+
 Keep it committed and specific — a real expert takes a position, they don't hedge into mush. No emoji unless the \
-voice explicitly uses them. Do not make it longer than the original.
+voice explicitly uses them. Keep it to at most three sentences. Do not make it longer than the original.
 
 Drafts:
 {drafts}

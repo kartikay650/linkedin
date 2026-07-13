@@ -2,47 +2,47 @@ import anthropic
 
 from app.config import settings
 from app.llm.humanize import humanize_comments
+from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
 _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-PROMPT = """You are writing LinkedIn comment replies AS this specific person. The single most important thing: \
-the reply must be indistinguishable from something they wrote themselves. Not "in their style" — actually theirs.
+PROMPT = """You are writing ONE LinkedIn comment reply AS {name}. The single most important thing: the reply must be \
+indistinguishable from something she typed herself. Not "in her style" — actually hers.
 
-=== HOW THIS PERSON ACTUALLY WRITES (study this hard) ===
+=== HOW SHE ACTUALLY WRITES (study this hard, match it exactly) ===
 {voice}
 === END ===
 
 {brand}
 
-The post they're replying to:
+{house_style}
+
+{examples}
+
+The post she is replying to:
 Author: {author}
 \"\"\"
 {content}
 \"\"\"
 
-Write {count} distinct reply options. Each must:
-- Sound exactly like the samples above — same sentence length, same rhythm, same vocabulary level, same amount of hedging or bluntness. If they write short and punchy, you write short and punchy. If they use a specific word, use it.
-- Take a real position from their viewpoints. React to a specific detail in the post (a mechanism, a number, a claim that's off), not a generic reaction.
-- Add genuine insight, never "Great post" or "So true".
-- Be 1 to 3 sentences.
+Write ONE reply that:
+- sounds exactly like her voice samples above — same sentence length, rhythm, vocabulary level, and bluntness,
+- reacts to one specific thing in THIS post, never a generic reaction that could sit under any post,
+- states one of her real positions (from the brand context) where it fits, in plain spoken language,
+- obeys every house-style and content-safety rule above, and obeys her CTA rules and guardrails.
 
-HARD RULES (never break):
-- Obey the CTA rules. Never write a call-to-action they wouldn't (e.g. no consumer/retail push if the rules say clinical/B2B only).
-- Obey the guardrails. If a natural reply would need a patient case study, an un-cited claim, a sensitive story, or an off-limits subject, do NOT write it — make the point within bounds instead.
-- Never invent statistics, study results, case studies, or credentials. Only use specifics from the brand profile or the post itself.
+Respond ONLY with JSON: {{"drafts": ["your one reply"]}}"""
 
-NEVER write like AI. Banned: em dashes as connectors, rule-of-three lists ("X, Y, and Z"), "game-changing / unlock / elevate / the future of / crucial / pivotal / delve / testament / underscore", "studies show / experts believe / it's well known", filler openers ("It's worth noting", "Interestingly"), and hedging everything into mush. Real people are lopsided and commit to a point.
+REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, following the operator's instruction. \
+Keep it unmistakably in her voice and obey every house-style rule.
 
-Respond ONLY with JSON: {{"drafts": ["option one", "option two", ...]}}"""
-
-REFINE_PROMPT = """Revise this LinkedIn comment, written AS this person, following the operator's instruction. \
-Keep it unmistakably in their voice.
-
-=== HOW THIS PERSON ACTUALLY WRITES ===
+=== HOW SHE ACTUALLY WRITES ===
 {voice}
 === END ===
+
+{house_style}
 
 The post being replied to:
 \"\"\"
@@ -56,8 +56,8 @@ Current reply:
 
 Operator's instruction: {instruction}
 
-Rewrite the reply to follow that instruction while staying in their exact voice. No em dashes, no rule-of-three, \
-no promotional or AI words, no invented facts. Commit to a specific point. Respond ONLY with JSON: {{"draft": "..."}}"""
+Rewrite the reply to follow that instruction while staying in her exact voice and inside every house-style and \
+content-safety rule above. Respond ONLY with JSON: {{"draft": "..."}}"""
 
 
 def _voice_block(client: Client) -> str:
@@ -91,9 +91,11 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
         messages=[{
             "role": "user",
             "content": PROMPT.format(
-                count=count,
+                name=client.name,
                 voice=_voice_block(client),
                 brand=_brand_block(client),
+                house_style=HOUSE_STYLE,
+                examples=STRONG_EXAMPLES,
                 author=post.author_name,
                 content=post.content_snippet,
             ),
@@ -115,7 +117,9 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
         messages=[{
             "role": "user",
             "content": REFINE_PROMPT.format(
+                name=client.name,
                 voice=_voice_block(client),
+                house_style=HOUSE_STYLE,
                 content=post.content_snippet,
                 current=current_text,
                 instruction=instruction,
