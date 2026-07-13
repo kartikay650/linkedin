@@ -57,9 +57,10 @@ def humanize_comments(texts: list[str], voice_guide: str) -> list[str]:
         return texts
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
     try:
-        message = _client.messages.create(
+        message = _client.with_options(max_retries=1, timeout=40.0).messages.create(
             model=settings.draft_model,
             max_tokens=700,
+            thinking={"type": "disabled"},  # mechanical rewrite — no thinking, keeps us well under the 60s edge
             messages=[{
                 "role": "user",
                 "content": PROMPT.format(voice=(voice_guide or "").strip() or "Direct, plain, no fluff.", drafts=numbered),

@@ -93,9 +93,10 @@ Respond ONLY with JSON:
 
 def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str = "") -> list[dict]:
     try:
-        message = _client.messages.create(
+        message = _client.with_options(max_retries=1, timeout=35.0).messages.create(
             model=settings.draft_model,
             max_tokens=1500,
+            thinking={"type": "disabled"},  # classification pass — no thinking, keeps the draft route under 60s
             messages=[{
                 "role": "user",
                 "content": PROVENANCE_PROMPT.format(
