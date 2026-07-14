@@ -156,7 +156,7 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
     than letting the whole request die at the edge."""
     if not flagged:
         return []
-    flagged = flagged[:3]
+    flagged = flagged[:2]  # keep the web pass small enough to finish in the serverless window
     claims_block = "\n".join(f"- {c}" for c in flagged)
     timed_out = [{"claim": c, "verdict": "unconfirmed", "source_url": "",
                   "note": "couldn't confirm in time — please check manually"} for c in flagged]
@@ -167,8 +167,10 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
     # regardless of SDK/model/tool version.
     body = {
         "model": settings.draft_model,
-        "max_tokens": 1500,
-        "tools": [{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}],
+        "max_tokens": 1200,
+        # Basic web search (no dynamic-filtering/code-exec) — much faster, so it
+        # finishes inside the serverless window; 2 searches is enough to cite a claim.
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
         "messages": [{"role": "user", "content": VERIFY_PROMPT.format(reply=reply, claims=claims_block)}],
     }
     headers = {
