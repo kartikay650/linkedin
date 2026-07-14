@@ -17,6 +17,7 @@ import json
 import re
 
 import anthropic
+import httpx
 
 from app.config import settings
 from app.llm.utils import extract_json
@@ -159,17 +160,33 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
     claims_block = "\n".join(f"- {c}" for c in flagged)
     timed_out = [{"claim": c, "verdict": "unconfirmed", "source_url": "",
                   "note": "couldn't confirm in time — please check manually"} for c in flagged]
+
+    # Call the web-search tool over raw HTTP: the pinned SDK (0.34.2) can't
+    # deserialize the web_search_tool_result / server_tool_use blocks the response
+    # carries, so going through the SDK raised and always fell back. Raw JSON works
+    # regardless of SDK/model/tool version.
+    body = {
+        "model": settings.draft_model,
+        "max_tokens": 1500,
+        "tools": [{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}],
+        "messages": [{"role": "user", "content": VERIFY_PROMPT.format(reply=reply, claims=claims_block)}],
+    }
+    headers = {
+        "x-api-key": settings.anthropic_api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
     try:
-        message = _client.with_options(timeout=45.0, max_retries=0).messages.create(
-            model=settings.draft_model,
-            max_tokens=1500,
-            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}],
-            messages=[{
-                "role": "user",
-                "content": VERIFY_PROMPT.format(reply=reply, claims=claims_block),
-            }],
-        )
-        data = _json_from_all_text(message)
-        return list(data.get("results", [])) or timed_out
-    except (ValueError, KeyError, anthropic.AnthropicError):
+        r = httpx.post("https://api.anthropic.com/v1/messages", json=body, headers=headers, timeout=48.0)
+        if r.status_code != 200:
+            print(f"[verify] web search HTTP {r.status_code}: {r.text[:200]}")
+            return timed_out
+        data = r.json()
+        text = "\n".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        cleaned = _FENCE_RE.sub("", text).strip()
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        parsed = json.loads(cleaned[start:end + 1]) if start != -1 and end > start else {}
+        return list(parsed.get("results", [])) or timed_out
+    except Exception as ex:  # network / parse / timeout — never break the endpoint
+        print(f"[verify] {type(ex).__name__}: {ex}")
         return timed_out

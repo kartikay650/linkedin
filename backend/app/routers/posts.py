@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
@@ -26,6 +28,7 @@ def _docs_text(db: Session, client_id: int) -> str:
 def list_posts_for_client(
     client_id: int,
     view: str = Query("active", description="active | needs_review | approved | posted | all"),
+    max_age_days: int = Query(5, description="only show posts newer than this many days"),
     db: Session = Depends(get_db),
 ):
     query = (
@@ -35,6 +38,20 @@ def list_posts_for_client(
         .order_by(Post.relevance_score.desc().nullslast(), Post.fetched_at.desc())
     )
     posts = query.all()
+
+    # Only surface fresh posts — engaging early is the whole point. Fall back to
+    # fetch time when a post has no publish date (it was just scraped).
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+    def recent(post):
+        dt = post.posted_at or post.fetched_at
+        if dt is None:
+            return True
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt >= cutoff
+
+    posts = [p for p in posts if recent(p)]
 
     def has(post, status):
         return any(d.status == status for d in post.drafts)
