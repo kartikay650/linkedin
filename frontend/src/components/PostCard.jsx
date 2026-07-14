@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api } from "../api.js";
 import { toast } from "../toast.js";
 import Badge from "./Badge.jsx";
@@ -93,12 +93,28 @@ export default function PostCard({ post, onActioned }) {
     try {
       await api.verifyClaims(draft.id);
       onActioned();
-    } catch (e) {
-      toast(`Couldn't verify the claims: ${e.message}. Try again.`);
+    } catch {
+      // Background best-effort — a slow/failed web check just leaves the claim
+      // flagged "check manually"; never interrupt the operator with a toast.
     } finally {
       setVerifying(null);
     }
   };
+
+  // Automatically web-check any unverified clinical claim as soon as a draft
+  // appears — runs in the background, so the draft is usable immediately and the
+  // citation line fills in when the check returns.
+  const autoVerified = useRef(new Set());
+  useEffect(() => {
+    for (const d of workingDrafts) {
+      const hasUnverified = (d.provenance || []).some((s) => s.level === "unverified");
+      if (hasUnverified && !autoVerified.current.has(d.id)) {
+        autoVerified.current.add(d.id);
+        handleVerify(d);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.drafts]);
 
   const handleDraftReply = async () => {
     setDrafting(true);
@@ -289,11 +305,7 @@ export default function PostCard({ post, onActioned }) {
               </button>
             </div>
 
-            <ProvenancePanel
-              segments={draft.provenance}
-              verifying={verifying === draft.id}
-              onVerify={() => handleVerify(draft)}
-            />
+            <ProvenancePanel segments={draft.provenance} verifying={verifying === draft.id} />
 
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button
@@ -377,68 +389,48 @@ export default function PostCard({ post, onActioned }) {
   );
 }
 
-const LEVEL_META = {
-  grounded: { dot: "#12b76a", label: "From her material" },
-  general: { dot: "#98a2b3", label: "General" },
-  unverified: { dot: "#f79009", label: "Unverified — check before posting" },
-  contradicted: { dot: "#f04438", label: "Contradicted — fix before posting" },
-};
+const Dot = ({ c }) => (
+  <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: c, marginRight: 5, verticalAlign: "middle" }} />
+);
 
-// Clinical-safety trace: shows where each claim in the reply comes from, and
-// offers a web check for anything the AI asserted that isn't backed by her material.
-function ProvenancePanel({ segments, verifying, onVerify }) {
+// Clinical-safety trace, briefly: one status line, then only the claims that need
+// a look. Grounded/general points aren't listed — the reassurance is the summary.
+function ProvenancePanel({ segments, verifying }) {
   if (!Array.isArray(segments) || segments.length === 0) return null;
   const flagged = segments.filter((s) => s.level === "unverified" || s.level === "contradicted");
-  const grounded = segments.filter((s) => s.level === "grounded");
-  const hasUnverified = segments.some((s) => s.level === "unverified");
-  if (flagged.length === 0 && grounded.length === 0) return null;
+  const grounded = segments.filter((s) => s.level === "grounded").length;
+
+  if (flagged.length === 0) {
+    return (
+      <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
+        <Dot c="#12b76a" />Grounded in her material. Nothing to verify.
+      </div>
+    );
+  }
 
   return (
-    <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>
-        Where this comes from
+    <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+      <div>
+        <Dot c="#12b76a" />{grounded} grounded &nbsp;·&nbsp; <Dot c="#f79009" />{flagged.length} to verify
+        {verifying && <span style={{ marginLeft: 8, fontStyle: "italic" }}>checking sources…</span>}
       </div>
-      {segments
-        .filter((s) => s.level !== "general")
-        .map((s, i) => {
-          const meta = LEVEL_META[s.level] || LEVEL_META.general;
-          return (
-            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: meta.dot, marginTop: 5, flexShrink: 0 }} />
-              <div style={{ fontSize: 12, lineHeight: 1.45 }}>
-                <span style={{ color: "#374151" }}>"{s.text.trim()}"</span>
-                <span style={{ color: meta.dot, fontWeight: 600 }}> — {meta.label}</span>
-                {s.note && <span style={{ color: "var(--text-muted)" }}> · {s.note}</span>}
-                {s.source_url && (
-                  <>
-                    {" "}
-                    <a href={s.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
-                      source ↗
-                    </a>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      {hasUnverified && (
-        <button
-          onClick={onVerify}
-          disabled={verifying}
-          style={{
-            marginTop: 6,
-            padding: "5px 11px",
-            borderRadius: 8,
-            border: "1px solid var(--border)",
-            background: "var(--bg)",
-            fontSize: 12,
-            fontWeight: 600,
-            color: "var(--text-muted)",
-          }}
-        >
-          {verifying ? "Checking the web…" : "Verify claims on the web"}
-        </button>
-      )}
+      {flagged.map((s, i) => {
+        const red = s.level === "contradicted";
+        return (
+          <div key={i} style={{ marginTop: 3 }}>
+            <Dot c={red ? "#f04438" : "#f79009"} />
+            <span style={{ color: "#374151" }}>"{s.text.trim().slice(0, 55)}{s.text.trim().length > 55 ? "…" : ""}"</span>
+            {s.source_url ? (
+              <>
+                {" "}
+                <a href={s.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", fontWeight: 600 }}>source ↗</a>
+              </>
+            ) : (
+              <span> — {red ? "contradicted, fix" : "unconfirmed, check"}</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

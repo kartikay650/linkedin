@@ -192,7 +192,9 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
         "content-type": "application/json",
     }
     try:
-        r = httpx.post("https://api.anthropic.com/v1/messages", json=body, headers=headers, timeout=48.0)
+        # 40s ceiling leaves margin under the 60s function cap so the endpoint
+        # always returns (fallback to 'unconfirmed') rather than being killed at the edge.
+        r = httpx.post("https://api.anthropic.com/v1/messages", json=body, headers=headers, timeout=40.0)
         if r.status_code != 200:
             print(f"[verify] web search HTTP {r.status_code}: {r.text[:200]}")
             return fallback
