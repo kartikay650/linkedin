@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { api } from "../api.js";
 import { toast } from "../toast.js";
 import Badge from "./Badge.jsx";
@@ -52,9 +52,7 @@ export default function PostCard({ post, onActioned }) {
       setTweak((prev) => ({ ...prev, [draft.id]: "" }));
       // Refresh the citation for the rewritten text, then re-check the web in bg.
       setProvByDraft((prev) => ({ ...prev, [draft.id]: updated.provenance || [] }));
-      if ((updated.provenance || []).some((s) => s.level === "unverified")) {
-        handleVerify(draft.id);
-      }
+      maybeVerify(updated);
     } catch (e) {
       toast(`Couldn't tweak that reply: ${e.message}. Try again.`);
     } finally {
@@ -109,27 +107,21 @@ export default function PostCard({ post, onActioned }) {
     }
   };
 
-  // Automatically web-check any unverified clinical claim once per draft, in the
-  // background. Runs at most once per draft id (the ref persists across renders),
-  // and never triggers a feed reload, so it can't loop.
-  const autoVerified = useRef(new Set());
-  useEffect(() => {
-    for (const d of workingDrafts) {
-      if (autoVerified.current.has(d.id)) continue;
-      const segs = provByDraft[d.id] ?? d.provenance ?? [];
-      if (segs.some((s) => s.level === "unverified")) {
-        autoVerified.current.add(d.id);
-        handleVerify(d.id);
-      }
+  // Auto web-check a freshly produced draft if it has an unverified clinical claim.
+  // Triggered only by generate/tweak (below) — never on passive page loads — so it
+  // runs "in the workflow" without re-checking every time the dashboard opens.
+  const maybeVerify = (draft) => {
+    if (draft && (draft.provenance || []).some((s) => s.level === "unverified")) {
+      handleVerify(draft.id);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.drafts]);
+  };
 
   const handleDraftReply = async () => {
     setDrafting(true);
     try {
-      await api.draftReply(post.id);
+      const drafts = await api.draftReply(post.id);
       onActioned();
+      maybeVerify(Array.isArray(drafts) ? drafts[0] : null);
     } catch (e) {
       toast(`Couldn't generate a reply: ${e.message}. Try again in a moment.`);
     } finally {
