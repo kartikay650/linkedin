@@ -27,6 +27,8 @@ export default function PostCard({ post, onActioned }) {
   const [dismissing, setDismissing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [verifying, setVerifying] = useState(null);
+  // Web-verify results, kept local so a claim check never reloads the feed.
+  const [provByDraft, setProvByDraft] = useState({});
 
   // Drafts still being worked (drafted or scientist-approved, not yet posted/rejected).
   const workingDrafts = post.drafts.filter((d) => d.status === "pending" || d.status === "approved");
@@ -48,6 +50,11 @@ export default function PostCard({ post, onActioned }) {
       const updated = await api.refineDraft(draft.id, instruction.trim());
       setEditedText((prev) => ({ ...prev, [draft.id]: updated.text }));
       setTweak((prev) => ({ ...prev, [draft.id]: "" }));
+      // Refresh the citation for the rewritten text, then re-check the web in bg.
+      setProvByDraft((prev) => ({ ...prev, [draft.id]: updated.provenance || [] }));
+      if ((updated.provenance || []).some((s) => s.level === "unverified")) {
+        handleVerify(draft.id);
+      }
     } catch (e) {
       toast(`Couldn't tweak that reply: ${e.message}. Try again.`);
     } finally {
@@ -88,29 +95,31 @@ export default function PostCard({ post, onActioned }) {
     }
   };
 
-  const handleVerify = async (draft) => {
-    setVerifying(draft.id);
+  const handleVerify = async (draftId) => {
+    setVerifying(draftId);
     try {
-      await api.verifyClaims(draft.id);
-      onActioned();
+      const updated = await api.verifyClaims(draftId);
+      // Update only this draft's citation locally — never reload the feed.
+      setProvByDraft((prev) => ({ ...prev, [draftId]: updated.provenance || [] }));
     } catch {
       // Background best-effort — a slow/failed web check just leaves the claim
-      // flagged "check manually"; never interrupt the operator with a toast.
+      // flagged "check manually"; never interrupt the operator.
     } finally {
       setVerifying(null);
     }
   };
 
-  // Automatically web-check any unverified clinical claim as soon as a draft
-  // appears — runs in the background, so the draft is usable immediately and the
-  // citation line fills in when the check returns.
+  // Automatically web-check any unverified clinical claim once per draft, in the
+  // background. Runs at most once per draft id (the ref persists across renders),
+  // and never triggers a feed reload, so it can't loop.
   const autoVerified = useRef(new Set());
   useEffect(() => {
     for (const d of workingDrafts) {
-      const hasUnverified = (d.provenance || []).some((s) => s.level === "unverified");
-      if (hasUnverified && !autoVerified.current.has(d.id)) {
+      if (autoVerified.current.has(d.id)) continue;
+      const segs = provByDraft[d.id] ?? d.provenance ?? [];
+      if (segs.some((s) => s.level === "unverified")) {
         autoVerified.current.add(d.id);
-        handleVerify(d);
+        handleVerify(d.id);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -305,7 +314,7 @@ export default function PostCard({ post, onActioned }) {
               </button>
             </div>
 
-            <ProvenancePanel segments={draft.provenance} verifying={verifying === draft.id} />
+            <ProvenancePanel segments={provByDraft[draft.id] ?? draft.provenance} verifying={verifying === draft.id} />
 
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button

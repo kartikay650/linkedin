@@ -183,7 +183,7 @@ export default function Dashboard() {
 
         {selectedClient &&
           !loading &&
-          posts.map((post) => <PostCard key={post.id} post={post} onActioned={loadPosts} />)}
+          posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => loadPosts(true)} />)}
 
         {usage.length > 0 && (
           <div style={{ marginTop: 36, paddingTop: 14, borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)" }}>
