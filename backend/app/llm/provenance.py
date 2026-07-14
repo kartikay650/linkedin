@@ -126,25 +126,31 @@ def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str =
     return out or [{"text": reply, "level": "general", "note": ""}]
 
 
-VERIFY_PROMPT = """You are fact-checking the clinical/statistical claims in a health expert's drafted \
-LinkedIn comment before it is posted. Use web search to check each flagged claim against reputable sources \
-(peer-reviewed studies, medical bodies, established health publications).
+VERIFY_PROMPT = """You are fact-checking claims in a health expert's LinkedIn comment before it is posted.
+
+You MUST use the web_search tool — search at least once for EACH claim before you decide. Never answer from \
+memory; always search first.
 
 The drafted reply:
 \"\"\"
 {reply}
 \"\"\"
 
-Claims to verify (these were flagged as specific factual claims not backed by the client's own material):
+Claims to verify, numbered:
 {claims}
 
-For each claim, search the web, then decide:
-- "supported": reputable sources back it — include the single best source URL.
-- "unconfirmed": you could not find reputable support — the operator must remove or soften it.
-- "contradicted": reputable sources disagree — flag it clearly.
+For each claim, in the same order, search the web and decide:
+- "supported": reputable sources back the claim or its underlying mechanism — peer-reviewed studies, medical \
+bodies, established health/science publications, or well-established concepts (e.g. circadian/ultradian rhythms, \
+cortisol, inflammation). Include the single best source URL.
+- "contradicted": reputable sources clearly disagree. Include the source URL.
+- "unconfirmed": after actually searching, nothing reputable supports it either way.
 
-Respond ONLY with JSON:
-{{"results": [{{"claim": "...", "verdict": "supported|unconfirmed|contradicted", "source_url": "...", "note": "one sentence"}}]}}"""
+Lean toward "supported" with a good source when the general idea is well established, even if the exact wording \
+differs. Only use "unconfirmed" when a real search turns up nothing solid.
+
+Respond ONLY with JSON, one result per claim IN ORDER:
+{{"results": [{{"verdict": "supported|contradicted|unconfirmed", "source_url": "https://...", "note": "one sentence on what the source says"}}]}}"""
 
 
 def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
@@ -183,7 +189,7 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
         "max_tokens": 1200,
         # Basic web search (no dynamic-filtering/code-exec) — much faster, so it
         # finishes inside the serverless window; 2 searches is enough to cite a claim.
-        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
         "messages": [{"role": "user", "content": VERIFY_PROMPT.format(reply=reply, claims=claims_block)}],
     }
     headers = {
