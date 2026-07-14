@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft
@@ -159,6 +160,7 @@ def verify_claims_route(draft_id: int, db: Session = Depends(get_db)):
         # "unconfirmed" stays "unverified"
 
     draft.provenance = segments
+    flag_modified(draft, "provenance")  # in-place JSON edits aren't auto-detected
     db.commit()
     db.refresh(draft)
     return draft
