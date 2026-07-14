@@ -141,22 +141,17 @@ def verify_claims_route(draft_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "draft not found")
 
     segments = list(draft.provenance or [])
-    flagged = [s["text"] for s in segments if s.get("level") == "unverified"]
-    if not flagged:
+    flagged_segs = [s for s in segments if s.get("level") == "unverified"][:2]
+    if not flagged_segs:
         return draft
 
-    results = verify_claims(draft.edited_text or draft.text, flagged)
-    # Fold each verdict back onto its matching segment.
-    by_claim = {r.get("claim", ""): r for r in results}
-    for seg in segments:
-        if seg.get("level") != "unverified":
-            continue
-        r = by_claim.get(seg["text"]) or next((x for x in results if seg["text"] in x.get("claim", "") or x.get("claim", "") in seg["text"]), None)
-        if not r:
-            continue
+    results = verify_claims(draft.edited_text or draft.text, [s["text"] for s in flagged_segs])
+    # Fold verdicts back by order (results are index-aligned to flagged_segs).
+    for seg, r in zip(flagged_segs, results):
         verdict = r.get("verdict")
         seg["source_url"] = r.get("source_url", "")
-        seg["note"] = r.get("note", seg.get("note", ""))
+        if r.get("note"):
+            seg["note"] = r["note"]
         if verdict == "supported":
             seg["level"] = "grounded"
         elif verdict == "contradicted":

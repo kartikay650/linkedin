@@ -154,12 +154,25 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
     hard 60s ceiling — so cap the work (at most 3 claims, few searches) and give
     the API call a 45s budget. If it runs long, we return 'unconfirmed' rather
     than letting the whole request die at the edge."""
+    flagged = flagged[:2]  # keep the web pass small enough to finish in the serverless window
     if not flagged:
         return []
-    flagged = flagged[:2]  # keep the web pass small enough to finish in the serverless window
-    claims_block = "\n".join(f"- {c}" for c in flagged)
-    timed_out = [{"claim": c, "verdict": "unconfirmed", "source_url": "",
-                  "note": "couldn't confirm in time — please check manually"} for c in flagged]
+    claims_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(flagged))
+    # Aligned to `flagged` by index — the caller zips this onto the flagged segments,
+    # so we never depend on matching the model's reworded claim text.
+    fallback = [{"verdict": "unconfirmed", "source_url": "",
+                 "note": "couldn't confirm — please check manually"} for _ in flagged]
+
+    def _align(results):
+        out = []
+        for i in range(len(flagged)):
+            r = results[i] if i < len(results) and isinstance(results[i], dict) else {}
+            out.append({
+                "verdict": r.get("verdict", "unconfirmed"),
+                "source_url": r.get("source_url", "") or "",
+                "note": r.get("note", "") or fallback[i]["note"],
+            })
+        return out
 
     # Call the web-search tool over raw HTTP: the pinned SDK (0.34.2) can't
     # deserialize the web_search_tool_result / server_tool_use blocks the response
@@ -182,13 +195,13 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
         r = httpx.post("https://api.anthropic.com/v1/messages", json=body, headers=headers, timeout=48.0)
         if r.status_code != 200:
             print(f"[verify] web search HTTP {r.status_code}: {r.text[:200]}")
-            return timed_out
+            return fallback
         data = r.json()
         text = "\n".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
         cleaned = _FENCE_RE.sub("", text).strip()
         start, end = cleaned.find("{"), cleaned.rfind("}")
         parsed = json.loads(cleaned[start:end + 1]) if start != -1 and end > start else {}
-        return list(parsed.get("results", [])) or timed_out
+        return _align(list(parsed.get("results", [])))
     except Exception as ex:  # network / parse / timeout — never break the endpoint
         print(f"[verify] {type(ex).__name__}: {ex}")
-        return timed_out
+        return fallback
