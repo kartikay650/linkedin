@@ -88,7 +88,9 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
     message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
         model=settings.draft_model,
         max_tokens=800,
-        thinking={"type": "disabled"},  # the house-style prompt + few-shot do the work; keeps the 3-call route fast
+        # Disable server-side default thinking (via extra_body — the pinned SDK predates the kwarg).
+        # The house-style prompt + few-shot do the work; keeps the 3-call route fast.
+        extra_body={"thinking": {"type": "disabled"}},
         messages=[{
             "role": "user",
             "content": PROMPT.format(

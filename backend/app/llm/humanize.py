@@ -60,7 +60,7 @@ def humanize_comments(texts: list[str], voice_guide: str) -> list[str]:
         message = _client.with_options(max_retries=1, timeout=40.0).messages.create(
             model=settings.draft_model,
             max_tokens=700,
-            thinking={"type": "disabled"},  # mechanical rewrite — no thinking, keeps us well under the 60s edge
+            extra_body={"thinking": {"type": "disabled"}},  # mechanical rewrite — no thinking, keeps us under 60s
             messages=[{
                 "role": "user",
                 "content": PROMPT.format(voice=(voice_guide or "").strip() or "Direct, plain, no fluff.", drafts=numbered),
