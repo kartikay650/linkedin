@@ -16,8 +16,29 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.llm.relevance import score_post
-from app.models import Client, Post
+from app.models import Client, Creator, Post
 from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
+
+# Recent posts to pull per source. Watch-creators (her hand-picked, high-priority
+# profiles) get more; the shared creator database gets one recent post each so a
+# sync surfaces the field without flooding the feed.
+_WATCH_POSTS = 3
+_GLOBAL_POSTS = 1
+# Firing an actor run per creator is a synchronous POST each; cap how many the
+# shared database contributes per sync so the request stays under the serverless
+# ceiling and the free Apify tier isn't swamped. Full coverage is a follow-up
+# batched/scheduled job. Watch-creators are always fired on top of this.
+_GLOBAL_LIMIT = 40
+
+
+def _active_creators(db: Session):
+    return (
+        db.query(Creator)
+        .filter(Creator.kind == "creator", Creator.active.is_(True))
+        .order_by(Creator.id)
+        .limit(_GLOBAL_LIMIT)
+        .all()
+    )
 
 
 def run_discovery_for_client(db: Session, client: Client) -> int:
@@ -38,17 +59,28 @@ def run_discovery_for_client(db: Session, client: Client) -> int:
 
 
 def start_discovery_for_client(db: Session, client: Client) -> int:
-    """Webhook mode: start one actor run per watch-creator with a callback, and
-    return how many were started. Posts arrive later via /apify/webhook."""
+    """Webhook mode: start one actor run per tracked profile with a callback, and
+    return how many were started. Posts arrive later via /apify/webhook.
+
+    Sources = this client's hand-picked watch-creators PLUS the shared, agency-wide
+    creator database. The same creator post can land on several clients (per-client
+    relevance + a unique comment each), which the per-client uniqueness allows."""
+    # (url, label, max_posts) — dedupe by URL so a profile in both lists fires once.
+    sources = {}
+    for c in client.watch_creators:
+        sources[c.profile_url] = (c.label or "", _WATCH_POSTS)
+    for g in _active_creators(db):
+        sources.setdefault(g.profile_url, (g.name or "", _GLOBAL_POSTS))
+
     started = 0
-    for creator in client.watch_creators:
-        payload = _build_input(creator.profile_url, 3)
-        webhook = _build_webhook(client.id, creator.label or "", creator.profile_url)
+    for url, (label, max_posts) in sources.items():
+        payload = _build_input(url, max_posts)
+        webhook = _build_webhook(client.id, label, url)
         try:
             start_actor(settings.apify_actor_id, payload, webhook=webhook)
             started += 1
         except ApifyError as e:
-            print(f"[apify] couldn't start run for {creator.label or creator.profile_url}: {e}")
+            print(f"[apify] couldn't start run for {label or url}: {e}")
     return started
 
 

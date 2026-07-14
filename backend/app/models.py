@@ -74,6 +74,22 @@ class Client(Base):
     prospects = relationship("Prospect", back_populates="client", cascade="all, delete-orphan")
 
 
+class Creator(Base):
+    """Shared, agency-wide creator database (Lara's ICP engagement list). Unlike
+    per-client WatchCreators, these are tracked once and fanned out to every
+    client, ranked by per-client relevance. kind='creator' = track + comment;
+    kind='prospect' = lead-gen target (ICP), surfaced separately, not auto-commented."""
+    __tablename__ = "creators"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, default="")
+    profile_url = Column(String, nullable=False, unique=True)
+    headline = Column(String, default="")  # tier / notes from the source list
+    kind = Column(String, default="creator")  # "creator" | "prospect"
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class WatchCreator(Base):
     __tablename__ = "watch_creators"
     __table_args__ = (UniqueConstraint("client_id", "profile_url", name="uq_watch_creator_client_profile"),)
@@ -143,6 +159,9 @@ class Burner(Base):
 
 class Post(Base):
     __tablename__ = "posts"
+    # Per-client uniqueness: the same creator post can appear on multiple clients'
+    # dashboards (each with its own relevance score + unique comment).
+    __table_args__ = (UniqueConstraint("client_id", "post_url", name="uq_post_client_url"),)
 
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
@@ -153,7 +172,7 @@ class Post(Base):
 
     author_name = Column(String, default="")
     author_profile_url = Column(String, default="")
-    post_url = Column(String, nullable=False, unique=True)
+    post_url = Column(String, nullable=False)  # unique per (client_id, post_url), see __table_args__
     content_snippet = Column(Text, default="")
     posted_at = Column(DateTime, nullable=True)
     engagement = Column(JSON, default=dict)  # {"likes": n, "comments": n}
