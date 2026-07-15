@@ -15,6 +15,7 @@ const empty = {
 export default function AddClientModal({ open, onClose, onCreated }) {
   const [step, setStep] = useState(0);
   const [files, setFiles] = useState([]);
+  const [pastedText, setPastedText] = useState("");
   const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(false);
   const [progress, setProgress] = useState(null);
@@ -24,7 +25,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const [f, setF] = useState(empty);
 
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
-  const reset = () => { setStep(0); setFiles([]); setReading(false); setSaving(false); setError(null); setProgress(null); setCreators([]); setF(empty); };
+  const reset = () => { setStep(0); setFiles([]); setPastedText(""); setReading(false); setSaving(false); setError(null); setProgress(null); setCreators([]); setF(empty); };
   const close = () => { reset(); onClose(); };
 
   const addFiles = (list) => {
@@ -35,7 +36,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
 
   const extractAndContinue = async () => {
     setError(null);
-    if (files.length === 0) { setStep(1); return; } // fill manually
+    if (files.length === 0 && !pastedText.trim()) { setStep(1); return; } // fill manually
     // Validate up front so the operator gets a clear reason, not a vague failure.
     const ALLOWED = [".pdf", ".docx", ".txt"];
     const MAX_MB = 4; // Vercel rejects request bodies over ~4.5MB before they reach us
@@ -53,8 +54,8 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     setReading(true);
     try {
       // Read each file's text one at a time (keeps each request small), then
-      // extract from the combined text.
-      let combined = "";
+      // extract from the combined text. Pasted text is included as-is.
+      let combined = pastedText.trim() ? pastedText.trim() + "\n\n---\n\n" : "";
       const unreadable = [];
       for (let i = 0; i < files.length; i++) {
         setProgress(`Reading ${files[i].name} (${i + 1}/${files.length})…`);
@@ -162,15 +163,28 @@ export default function AddClientModal({ open, onClose, onCreated }) {
             </div>
           )}
 
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
+              Or paste the strategy / brand doc text here — handy if a file won't upload (a Google/Word doc, a large or scanned PDF).
+            </div>
+            <textarea
+              value={pastedText}
+              onChange={(e) => setPastedText(e.target.value)}
+              rows={5}
+              placeholder="Paste the client's strategy or brand document text…"
+              style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 10, padding: 10, fontSize: 13, lineHeight: 1.5, fontFamily: "inherit", resize: "vertical" }}
+            />
+          </div>
+
           {error && <ErrorLine text={error} />}
 
           <Footer
             right={
               <button className="btn btn-primary" onClick={extractAndContinue} disabled={reading}>
-                {reading ? <><span className="spin" /> &nbsp;{progress || "Reading…"}</> : files.length ? "Extract & continue" : "Continue"}
+                {reading ? <><span className="spin" /> &nbsp;{progress || "Reading…"}</> : (files.length || pastedText.trim()) ? "Extract & continue" : "Continue"}
               </button>
             }
-            leftText={files.length ? null : "No docs? You can fill it in by hand."}
+            leftText={(files.length || pastedText.trim()) ? null : "No docs? You can fill it in by hand."}
           />
         </div>
       )}
