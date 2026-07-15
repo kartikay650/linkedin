@@ -63,6 +63,12 @@ export const api = {
   syncClient: (clientId) => request(`/clients/${clientId}/sync`, { method: "POST" }),
   dismissPost: (postId) => request(`/posts/${postId}/dismiss`, { method: "POST" }),
   apifyUsage: () => request("/apify-usage"),
+  analytics: () => request("/analytics"),
+
+  listCreators: (kind) => request(`/creators${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
+  addCreator: (payload) => request("/creators", { method: "POST", body: JSON.stringify(payload) }),
+  updateCreator: (id, payload) => request(`/creators/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteCreator: (id) => request(`/creators/${id}`, { method: "DELETE" }),
 
   listWatchCreators: (clientId) => request(`/clients/${clientId}/watch-creators`),
   addWatchCreator: (clientId, payload) =>

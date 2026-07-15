@@ -9,7 +9,7 @@ const STEPS = ["Documents", "Identity", "Voice", "Details"];
 
 const empty = {
   name: "", specialty: "", linkedinUrl: "", tone: "", voiceSamples: "", topics: "",
-  viewpoints: "", audience: "", keyMessages: "", ctaRules: "", guardrails: "",
+  viewpoints: "", audience: "", keyMessages: "", ctaRules: "", guardrails: "", personalStory: "",
 };
 
 export default function AddClientModal({ open, onClose, onCreated }) {
@@ -55,6 +55,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         topics: Array.isArray(p.topics) ? p.topics.join(", ") : "",
         viewpoints: p.viewpoints || "", audience: p.audience || "",
         keyMessages: p.key_messages || "", ctaRules: p.cta_rules || "", guardrails: p.guardrails || "",
+        personalStory: p.personal_story || "",
       });
       setCreators(Array.isArray(p.suggested_creators) ? p.suggested_creators : []);
       setStep(1);
@@ -89,6 +90,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         tone_profile: f.tone.trim(), voice_guide: f.tone.trim(), voice_samples: f.voiceSamples,
         viewpoints: f.viewpoints, audience: f.audience,
         key_messages: f.keyMessages, cta_rules: f.ctaRules, guardrails: f.guardrails,
+        personal_story: f.personalStory,
       });
       if (files.length) {
         setProgress("Saving documents…");
@@ -180,6 +182,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
           <Field textarea label="Audience" value={f.audience} onChange={(v) => set("audience", v)} placeholder="Who they're speaking to, and their pain points…" />
           <Field textarea label="Key messages" value={f.keyMessages} onChange={(v) => set("keyMessages", v)} placeholder="Core points they want to reinforce…" />
           <Field textarea label="Guardrails" hint="Hard rules the drafter must never break" value={f.guardrails} onChange={(v) => set("guardrails", v)} placeholder="e.g. never make claims without evidence…" />
+          <Field textarea label="Personal story / why" hint="Their mission and personal anecdotes — used for genuine human touch" value={f.personalStory} onChange={(v) => set("personalStory", v)} placeholder="e.g. what drew them to this field, stories they tell…" />
           {creators.length > 0 && (
             <div className="field">
               <label className="field-label">People we'll track for them</label>

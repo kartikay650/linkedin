@@ -5,8 +5,12 @@ import PostCard from "../components/PostCard.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import AddClientModal from "../components/AddClientModal.jsx";
 import ManageClientModal from "../components/ManageClientModal.jsx";
+import ProspectsPanel from "../components/ProspectsPanel.jsx";
+import AnalyticsPanel from "../components/AnalyticsPanel.jsx";
 import Toaster from "../components/Toaster.jsx";
 import { toast } from "../toast.js";
+
+const POST_VIEWS = ["active", "approved", "posted", "all"];
 
 export default function Dashboard() {
   const [clients, setClients] = useState([]);
@@ -39,7 +43,7 @@ export default function Dashboard() {
   }, [loadClients]);
 
   const loadPosts = useCallback((silent) => {
-    if (!selectedClientId) return;
+    if (!selectedClientId || !POST_VIEWS.includes(view)) return;
     if (!silent) setLoading(true);
     api
       .listPosts(selectedClientId, view)
@@ -78,6 +82,16 @@ export default function Dashboard() {
   };
 
   const selectedClient = clients.find((c) => c.id === selectedClientId);
+  const isPostView = POST_VIEWS.includes(view);
+
+  const TABS = [
+    ["active", "Queue"],
+    ["approved", "Approved"],
+    ["posted", "Posted"],
+    ["all", "All"],
+    ["prospects", "Prospects"],
+    ["analytics", "Analytics"],
+  ];
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
@@ -88,8 +102,8 @@ export default function Dashboard() {
         onAddClient={() => setShowAddClient(true)}
       />
 
-      <main style={{ flex: 1, padding: "32px 40px", maxWidth: 760 }}>
-        {selectedClient && (
+      <main style={{ flex: 1, padding: "32px 40px", maxWidth: 1080, width: "100%", boxSizing: "border-box" }}>
+        {selectedClient && isPostView && (
           <header style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
               <h1 style={{ fontSize: 22, margin: 0 }}>{selectedClient.name}</h1>
@@ -141,51 +155,59 @@ export default function Dashboard() {
           </header>
         )}
 
-        {selectedClient && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-            {[
-              ["active", "Queue"],
-              ["approved", "Approved"],
-              ["posted", "Posted"],
-              ["all", "All"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setView(key)}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 999,
-                  border: "1px solid var(--border)",
-                  background: view === key ? "var(--primary)" : "var(--surface)",
-                  color: view === key ? "#fff" : "var(--text-muted)",
-                  fontSize: 13,
-                  fontWeight: 600,
-                }}
-              >
-                {label}
-              </button>
+        {(view === "prospects" || view === "analytics") && (
+          <h1 style={{ fontSize: 22, margin: "0 0 6px" }}>
+            {view === "prospects" ? "Creators & prospects" : "Analytics"}
+          </h1>
+        )}
+        {view === "prospects" && (
+          <div style={{ color: "var(--text-muted)", fontSize: 14, marginBottom: 20 }}>
+            The shared list every client draws from. Add your own or promote a prospect to tracked.
+          </div>
+        )}
+
+        {clients.length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
+            {TABS.map(([key, label], i) => (
+              <span key={key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {i === 4 && <span style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />}
+                <button
+                  onClick={() => setView(key)}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: 999,
+                    border: "1px solid var(--border)",
+                    background: view === key ? "var(--primary)" : "var(--surface)",
+                    color: view === key ? "#fff" : "var(--text-muted)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {label}
+                </button>
+              </span>
             ))}
           </div>
         )}
 
-        {!selectedClient && (
+        {view === "prospects" ? (
+          <ProspectsPanel />
+        ) : view === "analytics" ? (
+          <AnalyticsPanel />
+        ) : !selectedClient ? (
           <EmptyState title="No client selected" subtitle="Choose a client from the sidebar to see their queue." />
-        )}
-
-        {selectedClient && loading && <SkeletonList />}
-
-        {selectedClient && !loading && posts.length === 0 && (
+        ) : loading ? (
+          <SkeletonList />
+        ) : posts.length === 0 ? (
           <EmptyState
-            title="No posts yet"
-            subtitle="Hit Sync now to pull the latest posts from this client's tracked profiles."
+            title="No fresh posts"
+            subtitle="Nothing from the last 5 days yet. Hit Sync now to pull the latest, or check back after the morning sync."
           />
+        ) : (
+          posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => loadPosts(true)} />)
         )}
 
-        {selectedClient &&
-          !loading &&
-          posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => loadPosts(true)} />)}
-
-        {usage.length > 0 && (
+        {isPostView && usage.length > 0 && (
           <div style={{ marginTop: 36, paddingTop: 14, borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)" }}>
             Fetching credit this month:{" "}
             {usage.map((u, i) => (
