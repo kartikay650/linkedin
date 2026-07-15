@@ -41,7 +41,7 @@ SEVEN SLOP PATTERNS — never, verbatim or paraphrased:
 6. Abstract gratitude ("thanks for these valuable insights", "appreciate the inspiration")
 7. Reminder framing ("powerful reminder", "serves as a reminder that")
 
-AI WRITING TELLS — never (this is the only pass, so it has to read human right here):
+AI WRITING TELLS — never:
 - rule of three ("X, Y, and Z" as a neat balanced triplet) — real comments are lopsided
 - promotional / inflated words: vibrant, rich, profound, groundbreaking, game-changing, unlock, elevate, "the future of", crucial, pivotal, vital, seamless
 - AI vocabulary: delve, tapestry, testament, underscore, showcase, foster, intricate, interplay, robust, leverage, landscape (used abstractly), align with
@@ -50,6 +50,8 @@ AI WRITING TELLS — never (this is the only pass, so it has to read human right
 - filler openers ("It's worth noting", "Interestingly", "In today's world")
 - superficial "-ing" tails that fake depth ("highlighting the importance of...", "reflecting a broader...")
 - every sentence the same length — vary the rhythm, a fragment is fine
+
+SCIENTIFIC NUANCE — how certain to sound (important): these are scientists, and science is rarely black-and-white. Do NOT sound more certain than the evidence. Avoid absolutes and false precision: never "that explains it exactly", "almost exactly", "matches it exactly", "proven", "definitely", "always", "guarantees", or stating a mechanism as settled fact. Prefer measured, probabilistic phrasing: "tends to", "seems to", "often", "may", "one likely reason", "points toward", "consistent with", "at least part of what's going on". This is about the certainty of CLAIMS, not personality: stay committed to her actual viewpoint and stay specific, just never overstate what the science shows.
 
 CONTENT — safety:
 - Do NOT invent medical, biological, or mechanistic explanations, statistics, study results, dosages, or physiology.
@@ -107,6 +109,14 @@ _EMOJI_RE = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF❤]"
 )
 
+# Over-certainty / false precision — science should read nuanced, not black-and-white
+# (per Lara: e.g. "that explains it almost exactly" is too certain).
+_OVERCERTAIN_RE = re.compile(
+    r"\b(almost exactly|exactly explains|explains (it|that|this)[^.]{0,25}exactly|"
+    r"matches[^.]{0,30}exactly|lines up[^.]{0,20}exactly|proven|scientifically proven|"
+    r"definitely|guarantees?|always works|in every case|without a doubt|no question that)\b"
+)
+
 
 def _sentence_count(text: str) -> int:
     parts = [p for p in re.split(r"[.!?]+", text) if p.strip()]
@@ -143,6 +153,8 @@ def check_violations(text: str) -> list[str]:
         or re.search(r"\b(gap|distinction|shift|tension) (between|of|from)\b[^.]{0,60}\bis\b", low)
     ):
         v.append("nominalized-insight structure")
+    if _OVERCERTAIN_RE.search(low):
+        v.append("over-certainty (too black-and-white; science should read nuanced)")
     for opener in _PRAISE_OPENERS:
         if low.startswith(opener):
             v.append(f"praise opener: '{opener}'")

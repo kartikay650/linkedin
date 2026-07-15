@@ -50,8 +50,13 @@ Also remove these LinkedIn-comment tells specifically:
 
 GOLDEN RULE: react to the SUBJECT of the post, not to the post itself or how it was written. Pick ONE specific thing from the post. If the comment could sit under any post in this niche, rewrite it so it only makes sense under this one.
 
-Keep it committed and specific — a real expert takes a position, they don't hedge into mush. No emoji unless the \
-voice explicitly uses them. Keep it to at most three sentences. Do not make it longer than the original.
+Keep it committed on her actual viewpoint and specific — a real expert takes a position, they don't hedge into \
+mush. BUT do not sound more certain than the science: these are scientists and the field is rarely black-and-white. \
+Cut absolutes and false precision ("exactly", "almost exactly", "matches it exactly", "proven", "definitely", \
+"always", "guarantees", a mechanism stated as settled fact) and prefer measured phrasing ("tends to", "seems to", \
+"often", "may", "one likely reason", "points toward", "consistent with"). Nuance over black-and-white. This is about \
+the certainty of claims, not personality, so stay committed and specific — just don't overstate the evidence. \
+No emoji unless the voice explicitly uses them. Keep it to at most three sentences. Do not make it longer than the original.
 
 Drafts:
 {drafts}
