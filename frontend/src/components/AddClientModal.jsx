@@ -36,17 +36,38 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const extractAndContinue = async () => {
     setError(null);
     if (files.length === 0) { setStep(1); return; } // fill manually
+    // Validate up front so the operator gets a clear reason, not a vague failure.
+    const ALLOWED = [".pdf", ".docx", ".txt"];
+    const MAX_MB = 4; // Vercel rejects request bodies over ~4.5MB before they reach us
+    for (const f of files) {
+      const ext = (f.name.slice(f.name.lastIndexOf(".")) || "").toLowerCase();
+      if (!ALLOWED.includes(ext)) {
+        const msg = `"${f.name}" is not a supported type. Please upload PDF, DOCX, or TXT (a .doc or Google/Pages doc won't work — export it to PDF first).`;
+        setError(msg); toast(msg); return;
+      }
+      if (f.size > MAX_MB * 1024 * 1024) {
+        const msg = `"${f.name}" is ${(f.size / 1048576).toFixed(1)}MB. Each file must be under ${MAX_MB}MB — compress the PDF or split it, then upload again.`;
+        setError(msg); toast(msg); return;
+      }
+    }
     setReading(true);
     try {
       // Read each file's text one at a time (keeps each request small), then
       // extract from the combined text.
       let combined = "";
+      const unreadable = [];
       for (let i = 0; i < files.length; i++) {
         setProgress(`Reading ${files[i].name} (${i + 1}/${files.length})…`);
         const r = await api.docText(files[i]);
         if (r.text && r.text.trim()) combined += r.text + "\n\n---\n\n";
+        else unreadable.push(files[i].name);
       }
-      if (!combined.trim()) throw new Error("Couldn't read any text from those files.");
+      if (!combined.trim()) {
+        throw new Error(
+          `No readable text found in ${unreadable.join(", ") || "those files"}. ` +
+          `If it's a scanned or image-only PDF, upload a text-based version.`
+        );
+      }
       setProgress("Extracting the details…");
       const p = await api.extractBrand(combined);
       setF({
