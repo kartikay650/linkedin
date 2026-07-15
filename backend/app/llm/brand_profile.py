@@ -49,6 +49,11 @@ want to reinforce.
 needs approval, is off-limits, or is sensitive (e.g. case studies requiring sign-off, specific stories not to \
 be used, claims that must be cited, subjects to avoid). Phrase each as a clear rule.
 
+- personal_story: Their personal "why", mission, and specific personal anecdotes or lived experiences the material \
+reveals (what drew them to this field, moments that shaped their view, family/patient stories they tell about \
+themselves). Capture these verbatim or close to it — they are what let a reply carry a genuine human touch. Empty \
+if the material has none.
+
 - topics: A flat list of the subjects/keywords central to this client's field (for matching relevant posts).
 
 - suggested_creators: People named in the material as worth watching or engaging with. For each, give name, \
@@ -59,8 +64,8 @@ prefer them over any guess. Leave profile_url empty only if there's genuinely no
 
 Respond ONLY with JSON:
 {{"name": "...", "specialty": "...", "voice_guide": "...", "voice_samples": "...", "viewpoints": "...", \
-"audience": "...", "key_messages": "...", "cta_rules": "...", "guardrails": "...", "topics": ["..."], \
-"suggested_creators": [{{"name": "...", "profile_url": "...", "reason": "..."}}]}}"""
+"audience": "...", "key_messages": "...", "cta_rules": "...", "guardrails": "...", "personal_story": "...", \
+"topics": ["..."], "suggested_creators": [{{"name": "...", "profile_url": "...", "reason": "..."}}]}}"""
 
 
 # Cap combined source text so one extraction call stays well under the serverless
@@ -114,6 +119,7 @@ def extract_brand_profile(client: Client, documents: list[ClientDocument]) -> di
         "key_messages": _s("key_messages"),
         "cta_rules": _s("cta_rules"),
         "guardrails": _s("guardrails"),
+        "personal_story": _s("personal_story"),
         "topics": topics,
         "suggested_creators": creators,
     }

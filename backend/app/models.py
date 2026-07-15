@@ -65,6 +65,7 @@ class Client(Base):
     key_messages = Column(Text, default="")        # core positioning statements / proof points
     cta_rules = Column(Text, default="")           # how/when to point to resources; what NOT to push
     guardrails = Column(Text, default="")          # hard rules the drafter must never violate
+    personal_story = Column(Text, default="")      # their why / mission / personal anecdotes, for human-touch replies
     created_at = Column(DateTime, server_default=func.now())
 
     burner = relationship("Burner", back_populates="clients")

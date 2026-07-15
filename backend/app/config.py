@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     apify_use_webhooks: bool = False
     public_base_url: str = ""       # e.g. https://your-api.vercel.app — where Apify calls back
     apify_webhook_secret: str = ""  # shared secret; the /apify/webhook endpoint rejects mismatches
+    cron_secret: str = ""           # Vercel Cron sends Authorization: Bearer <this>; /cron/* rejects mismatches
 
     # Serverless (Vercel): use NullPool so functions don't hold DB connections, and
     # store uploaded docs in Supabase Storage (Vercel's disk is ephemeral). When

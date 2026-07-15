@@ -77,6 +77,7 @@ def _brand_block(client: Client) -> str:
         ("Their viewpoints / stances", client.viewpoints),
         ("Audience they're speaking to", client.audience),
         ("Key messages / proof points", client.key_messages),
+        ("Their personal why / stories (use for genuine human touch, never fabricate)", client.personal_story),
         ("CTA rules", client.cta_rules),
         ("Guardrails (hard rules)", client.guardrails),
     ]

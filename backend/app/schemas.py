@@ -18,6 +18,7 @@ class ClientOut(BaseModel):
     key_messages: Optional[str] = None
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
+    personal_story: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -37,6 +38,7 @@ class ClientCreate(BaseModel):
     key_messages: Optional[str] = None
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
+    personal_story: Optional[str] = None
 
 
 class ClientUpdate(BaseModel):
@@ -52,6 +54,7 @@ class ClientUpdate(BaseModel):
     key_messages: Optional[str] = None
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
+    personal_story: Optional[str] = None
 
 
 class ResolveCreatorRequest(BaseModel):
@@ -83,9 +86,34 @@ class BrandProfileOut(BaseModel):
     key_messages: str = ""
     cta_rules: str = ""
     guardrails: str = ""
+    personal_story: str = ""
     topics: list[str] = []
     suggested_creators: list[SuggestedCreator] = []
     source_document_ids: list[int] = []
+
+
+class CreatorOut(BaseModel):
+    id: int
+    name: str
+    profile_url: str
+    headline: str
+    kind: str
+    active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class CreatorCreate(BaseModel):
+    name: str = ""
+    profile_url: str
+    headline: str = ""
+    kind: str = "creator"  # "creator" (track + comment) | "prospect" (lead-gen)
+
+
+class CreatorUpdate(BaseModel):
+    kind: Optional[str] = None
+    active: Optional[bool] = None
 
 
 class WatchCreatorOut(BaseModel):
