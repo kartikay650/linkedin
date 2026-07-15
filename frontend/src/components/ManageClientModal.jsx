@@ -16,6 +16,8 @@ export default function ManageClientModal({ open, onClose, client, onUpdated, on
       <ProspectsSection client={client} />
       <ToneDocumentsSection client={client} onUpdated={onUpdated} />
       <BrandProfileSection client={client} onUpdated={onUpdated} />
+      <BenchmarkExamplesSection client={client} onUpdated={onUpdated} />
+      <FeedbackSection client={client} />
       <DeleteClientSection client={client} onDeleted={onDeleted} />
     </Modal>
   );
@@ -133,6 +135,143 @@ function ClientDetailsSection({ client, onUpdated }) {
           </button>
         </div>
       </div>
+    </section>
+  );
+}
+
+function BenchmarkExamplesSection({ client, onUpdated }) {
+  const [text, setText] = useState(client.benchmark_examples || "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setText(client.benchmark_examples || "");
+    setSaved(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client.id]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaved(false);
+    setError(null);
+    try {
+      await api.updateClient(client.id, { benchmark_examples: text });
+      setSaved(true);
+      onUpdated?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section style={sectionStyle}>
+      <div style={sectionTitleStyle}>Example replies (tone benchmark)</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
+        Paste a few ideal replies (and, if useful, ones to avoid) in this client's voice. Every new draft is
+        anchored to these. Label them, e.g. "GOOD: ..." / "AVOID: ...".
+      </div>
+      <textarea
+        rows={6}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={"GOOD: Good friends and love keep the heart healthy, Francesco. We really underestimate how deeply relationships affect the body.\nAVOID: Great post! This is such an important reminder."}
+        style={{ ...inputStyle, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
+      />
+      {error && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>{error}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 8 }}>
+        {saved && <span style={{ fontSize: 12, color: "var(--success)" }}>Saved</span>}
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          style={{ ...smallButtonStyle, background: "var(--primary)", color: "#fff", border: "none" }}
+        >
+          {saving ? "Saving…" : "Save examples"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function FeedbackSection({ client }) {
+  const [notes, setNotes] = useState([]);
+  const [text, setText] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const load = () => api.listFeedback(client.id).then(setNotes).catch(() => {});
+
+  useEffect(() => {
+    load();
+    setText("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client.id]);
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setAdding(true);
+    try {
+      await api.addFeedback(client.id, text.trim());
+      setText("");
+      load();
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    await api.deleteFeedback(client.id, id);
+    load();
+  };
+
+  // Only the most recent few are actually fed to the drafter; flag the rest as inactive.
+  const ACTIVE = 5;
+
+  return (
+    <section style={sectionStyle}>
+      <div style={sectionTitleStyle}>AI guidance notes</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
+        Corrections applied to every new draft for this client. The {ACTIVE} most recent are active — prune old ones so guidance stays sharp.
+      </div>
+      {notes.length === 0 && (
+        <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>No notes yet.</div>
+      )}
+      {notes.map((n, i) => (
+        <div
+          key={n.id}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 10,
+            padding: "8px 10px",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            marginBottom: 6,
+            opacity: i < ACTIVE ? 1 : 0.55,
+          }}
+        >
+          <div style={{ minWidth: 0, fontSize: 13 }}>
+            {i >= ACTIVE && <Badge tone="neutral">inactive</Badge>} {n.note}
+          </div>
+          <button onClick={() => handleDelete(n.id)} style={{ ...smallButtonStyle, color: "var(--danger)", flexShrink: 0 }}>
+            Delete
+          </button>
+        </div>
+      ))}
+      <form onSubmit={handleAdd} style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        <input
+          placeholder="e.g. Keep replies under two sentences."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <button type="submit" disabled={adding} style={{ ...smallButtonStyle, background: "var(--primary)", color: "#fff", border: "none" }}>
+          {adding ? "Adding…" : "Add note"}
+        </button>
+      </form>
     </section>
   );
 }

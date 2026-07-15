@@ -1,7 +1,6 @@
 import anthropic
 
 from app.config import settings
-from app.llm.humanize import humanize_comments
 from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES
 from app.llm.utils import extract_json
 from app.models import Client, Post
@@ -20,6 +19,10 @@ indistinguishable from something she typed herself. Not "in her style" — actua
 {house_style}
 
 {examples}
+
+{benchmark}
+
+{feedback}
 
 The post she is replying to:
 Author: {author}
@@ -43,6 +46,10 @@ Keep it unmistakably in her voice and obey every house-style rule.
 === END ===
 
 {house_style}
+
+{benchmark}
+
+{feedback}
 
 The post being replied to:
 \"\"\"
@@ -85,12 +92,39 @@ def _brand_block(client: Client) -> str:
     return ("=== BRAND CONTEXT ===\n" + "\n\n".join(parts) + "\n=== END ===") if parts else ""
 
 
+def _benchmark_block(client: Client) -> str:
+    """Operator-curated ideal / non-ideal examples for THIS client (few-shot anchor)."""
+    ex = (getattr(client, "benchmark_examples", "") or "").strip()
+    if not ex:
+        return ""
+    return (
+        "=== APPROVED EXAMPLES FOR THIS CLIENT (match this tone exactly — hand-picked as ideal/non-ideal) ===\n"
+        + ex
+        + "\n=== END ==="
+    )
+
+
+def _feedback_block(client: Client) -> str:
+    """Most recent operator corrections, auto-applied to every new draft."""
+    notes = getattr(client, "feedback", None) or []
+    recent = sorted(notes, key=lambda f: f.id, reverse=True)[:5]
+    lines = "\n".join(f"- {n.note.strip()}" for n in recent if (n.note or "").strip())
+    if not lines:
+        return ""
+    return (
+        "=== OPERATOR GUIDANCE (recent corrections — apply every one) ===\n"
+        + lines
+        + "\n=== END ==="
+    )
+
+
 def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
     message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
         model=settings.draft_model,
         max_tokens=800,
         # Disable server-side default thinking (via extra_body — the pinned SDK predates the kwarg).
-        # The house-style prompt + few-shot do the work; keeps the 3-call route fast.
+        # The house-style prompt + few-shot (which now carry the humanizer's AI-tell bans) do the
+        # work in this one call — no separate humanize pass, so the route is a single generation call.
         extra_body={"thinking": {"type": "disabled"}},
         messages=[{
             "role": "user",
@@ -100,6 +134,8 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
                 brand=_brand_block(client),
                 house_style=HOUSE_STYLE,
                 examples=STRONG_EXAMPLES,
+                benchmark=_benchmark_block(client),
+                feedback=_feedback_block(client),
                 author=post.author_name,
                 content=post.content_snippet,
             ),
@@ -107,23 +143,25 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
     )
     try:
         data = extract_json(message)
-        drafts = list(data["drafts"])
+        return [str(d) for d in data["drafts"] if str(d).strip()]
     except (ValueError, KeyError):
         return []
-    return humanize_comments(drafts, _voice_block(client))
 
 
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:
     """Revise a single draft per an operator instruction (e.g. 'shorter', 'more personal')."""
-    message = _client.messages.create(
+    message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
         model=settings.draft_model,
         max_tokens=800,
+        extra_body={"thinking": {"type": "disabled"}},  # single-call refine — house style carries the AI-tell bans
         messages=[{
             "role": "user",
             "content": REFINE_PROMPT.format(
                 name=client.name,
                 voice=_voice_block(client),
                 house_style=HOUSE_STYLE,
+                benchmark=_benchmark_block(client),
+                feedback=_feedback_block(client),
                 content=post.content_snippet,
                 current=current_text,
                 instruction=instruction,
@@ -132,8 +170,6 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     )
     try:
         data = extract_json(message)
-        revised = str(data["draft"])
+        return str(data["draft"])
     except (ValueError, KeyError):
         return current_text
-    out = humanize_comments([revised], _voice_block(client))
-    return out[0] if out else revised

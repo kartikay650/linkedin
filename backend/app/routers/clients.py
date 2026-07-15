@@ -14,11 +14,13 @@ from app.jobs.discovery import run_discovery_for_client, start_discovery_for_cli
 from app.llm.brand_profile import extract_brand_profile
 from app.llm.tone_synthesis import synthesize_tone_profile
 from app.scraper.linkedin_lookup import resolve_creator_url, resolve_creators
-from app.models import Client, ClientDocument, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
+from app.models import (
+    Client, ClientDocument, ClientFeedback, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
+)
 from app.schemas import (
-    BrandProfileOut, ClientCreate, ClientDocumentOut, ClientOut, ClientUpdate, ExtractBrandRequest,
-    ProspectOut, ResolveCreatorRequest, ToneSynthesisOut, TrackCreatorsRequest, WatchCreatorCreate,
-    WatchCreatorOut, YoutubeDocumentCreate,
+    BrandProfileOut, ClientCreate, ClientDocumentOut, ClientFeedbackCreate, ClientFeedbackOut, ClientOut,
+    ClientUpdate, ExtractBrandRequest, ProspectOut, ResolveCreatorRequest, ToneSynthesisOut,
+    TrackCreatorsRequest, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -166,6 +168,42 @@ def remove_watch_creator(client_id: int, creator_id: int, db: Session = Depends(
     if not creator or creator.client_id != client_id:
         raise HTTPException(404, "watch creator not found")
     db.delete(creator)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/{client_id}/feedback", response_model=list[ClientFeedbackOut])
+def list_feedback(client_id: int, db: Session = Depends(get_db)):
+    if not db.get(Client, client_id):
+        raise HTTPException(404, "client not found")
+    return (
+        db.query(ClientFeedback)
+        .filter(ClientFeedback.client_id == client_id)
+        .order_by(ClientFeedback.id.desc())
+        .all()
+    )
+
+
+@router.post("/{client_id}/feedback", response_model=ClientFeedbackOut)
+def add_feedback(client_id: int, payload: ClientFeedbackCreate, db: Session = Depends(get_db)):
+    if not db.get(Client, client_id):
+        raise HTTPException(404, "client not found")
+    note = (payload.note or "").strip()
+    if not note:
+        raise HTTPException(400, "note is empty")
+    fb = ClientFeedback(client_id=client_id, note=note)
+    db.add(fb)
+    db.commit()
+    db.refresh(fb)
+    return fb
+
+
+@router.delete("/{client_id}/feedback/{feedback_id}")
+def delete_feedback(client_id: int, feedback_id: int, db: Session = Depends(get_db)):
+    fb = db.get(ClientFeedback, feedback_id)
+    if not fb or fb.client_id != client_id:
+        raise HTTPException(404, "feedback not found")
+    db.delete(fb)
     db.commit()
     return {"ok": True}
 

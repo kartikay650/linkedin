@@ -66,6 +66,9 @@ class Client(Base):
     cta_rules = Column(Text, default="")           # how/when to point to resources; what NOT to push
     guardrails = Column(Text, default="")          # hard rules the drafter must never violate
     personal_story = Column(Text, default="")      # their why / mission / personal anecdotes, for human-touch replies
+    # Operator-curated ideal / non-ideal example comments for THIS client, injected as
+    # few-shot into the drafter and refiner so the tone locks to what Lara has approved.
+    benchmark_examples = Column(Text, default="")
     created_at = Column(DateTime, server_default=func.now())
 
     burner = relationship("Burner", back_populates="clients")
@@ -73,6 +76,8 @@ class Client(Base):
     posts = relationship("Post", back_populates="client", cascade="all, delete-orphan")
     documents = relationship("ClientDocument", back_populates="client", cascade="all, delete-orphan")
     prospects = relationship("Prospect", back_populates="client", cascade="all, delete-orphan")
+    feedback = relationship("ClientFeedback", back_populates="client", cascade="all, delete-orphan")
+    creator_links = relationship("CreatorClient", back_populates="client", cascade="all, delete-orphan")
 
 
 class Creator(Base):
@@ -89,6 +94,42 @@ class Creator(Base):
     kind = Column(String, default="creator")  # "creator" | "prospect"
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
+
+    client_links = relationship("CreatorClient", back_populates="creator", cascade="all, delete-orphan")
+
+    @property
+    def client_ids(self) -> list[int]:
+        return [link.client_id for link in self.client_links]
+
+
+class CreatorClient(Base):
+    """Which shared creators are assigned to which clients. Replaces the old
+    fan-out-to-everyone behaviour: a creator's posts are only pulled for the
+    clients they're explicitly assigned to (Bryan Johnson for Nikolina, say,
+    but not for Gordon)."""
+    __tablename__ = "creator_clients"
+    __table_args__ = (UniqueConstraint("creator_id", "client_id", name="uq_creator_client"),)
+
+    id = Column(Integer, primary_key=True)
+    creator_id = Column(Integer, ForeignKey("creators.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+
+    creator = relationship("Creator", back_populates="client_links")
+    client = relationship("Client", back_populates="creator_links")
+
+
+class ClientFeedback(Base):
+    """Operator guidance on a client's replies. The most recent N notes are
+    injected into the drafter/refiner so corrections auto-apply to new drafts;
+    the operator can prune stale ones from the Manage-profile view."""
+    __tablename__ = "client_feedback"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    note = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    client = relationship("Client", back_populates="feedback")
 
 
 class WatchCreator(Base):

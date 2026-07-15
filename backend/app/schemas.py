@@ -19,6 +19,7 @@ class ClientOut(BaseModel):
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
     personal_story: Optional[str] = None
+    benchmark_examples: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -39,6 +40,7 @@ class ClientCreate(BaseModel):
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
     personal_story: Optional[str] = None
+    benchmark_examples: Optional[str] = None
 
 
 class ClientUpdate(BaseModel):
@@ -55,6 +57,7 @@ class ClientUpdate(BaseModel):
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
     personal_story: Optional[str] = None
+    benchmark_examples: Optional[str] = None
 
 
 class ResolveCreatorRequest(BaseModel):
@@ -99,6 +102,7 @@ class CreatorOut(BaseModel):
     headline: str
     kind: str
     active: bool
+    client_ids: list[int] = []  # clients this creator is assigned to (fanned out only to these)
 
     class Config:
         from_attributes = True
@@ -114,6 +118,24 @@ class CreatorCreate(BaseModel):
 class CreatorUpdate(BaseModel):
     kind: Optional[str] = None
     active: Optional[bool] = None
+
+
+class CreatorClientsUpdate(BaseModel):
+    client_ids: list[int] = []
+
+
+class ClientFeedbackOut(BaseModel):
+    id: int
+    client_id: int
+    note: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ClientFeedbackCreate(BaseModel):
+    note: str
 
 
 class WatchCreatorOut(BaseModel):

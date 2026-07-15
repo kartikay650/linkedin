@@ -1,6 +1,7 @@
 """House style for LinkedIn comment replies, distilled from the agency's own
-master prompt (V2). This is the voice/safety spec every draft must obey — it
-is shared by the generator and the humanizer so a tweak can't reintroduce slop.
+master prompt (V2). This is the voice/safety spec every draft must obey. It
+carries the AI-tell bans directly (the generator obeys them in one call — there
+is no separate humanizer pass anymore), so a draft reads human on the first try.
 
 check_violations() is the benchmark: a programmatic pass over a draft that
 flags the exact patterns V2 bans, so we can measure "does it sound human" objectively
@@ -19,7 +20,7 @@ LENGTH: one to three sentences. Two is the sweet spot. Never a bare "Love this".
 
 LANGUAGE — never use:
 - emojis, exclamation points, em dashes (use periods or commas)
-- "it's not X, it's Y" / "it's not about X, it's about Y"
+- "it's not X, it's Y" / "it's not about X, it's about Y" — and more broadly, do NOT define things by negation. State what something IS, not what it isn't. Lead with the affirmative claim. Never use the "not this, but that" contrast, "isn't ... it's ...", or a clipped tailing negation ("no guessing") as the move — it is the clearest AI tell.
 - praise openers: "Great post", "Great point", "Love this", "Interesting take", "Great reminder", "Insightful"
 - confirming filler: "It's true that", "Absolutely", "Couldn't agree more", "So important"
 - summary openers: "What stood out to me is", "You make a great point about"
@@ -37,6 +38,16 @@ SEVEN SLOP PATTERNS — never, verbatim or paraphrased:
 5. Rarity flattery ("rare to see", "so refreshing to read", "it's not often you see")
 6. Abstract gratitude ("thanks for these valuable insights", "appreciate the inspiration")
 7. Reminder framing ("powerful reminder", "serves as a reminder that")
+
+AI WRITING TELLS — never (this is the only pass, so it has to read human right here):
+- rule of three ("X, Y, and Z" as a neat balanced triplet) — real comments are lopsided
+- promotional / inflated words: vibrant, rich, profound, groundbreaking, game-changing, unlock, elevate, "the future of", crucial, pivotal, vital, seamless
+- AI vocabulary: delve, tapestry, testament, underscore, showcase, foster, intricate, interplay, robust, leverage, landscape (used abstractly), align with
+- copula avoidance ("serves as", "stands as", "boasts") — just use is / are / has
+- vague attribution ("studies show", "experts believe", "it's well known") — be specific or drop it
+- filler openers ("It's worth noting", "Interestingly", "In today's world")
+- superficial "-ing" tails that fake depth ("highlighting the importance of...", "reflecting a broader...")
+- every sentence the same length — vary the rhythm, a fragment is fine
 
 CONTENT — safety:
 - Do NOT invent medical, biological, or mechanistic explanations, statistics, study results, dosages, or physiology.
@@ -113,8 +124,13 @@ def check_violations(text: str) -> list[str]:
         v.append("emoji")
     if _sentence_count(t) > 3:
         v.append(f"too long ({_sentence_count(t)} sentences)")
-    if re.search(r"\bit'?s not\b.{0,40}\bit'?s\b", low) or re.search(r"\bnot just\b.{0,30}\bbut\b", low):
-        v.append("not-X-but-Y pattern")
+    if (
+        re.search(r"\bit'?s not\b.{0,40}\bit'?s\b", low)
+        or re.search(r"\bnot just\b.{0,30}\bbut\b", low)
+        or re.search(r"\bisn'?t\b.{0,40}\bit'?s\b", low)
+        or re.search(r"\bnot\b[^.,]{0,40},\s*(it'?s|it is|but|rather)\b", low)
+    ):
+        v.append("negation-as-device (say what it is, not what it isn't)")
     # nominalized-insight formula: "the ... is the/a ... that most/don't/few ..."
     if re.search(r"\bthe\b.{3,60}\bis (the|a|one|what|something)\b.{0,60}(most|don'?t|few|still|would|wouldn'?t|no one|nobody)\b", low):
         v.append("nominalized-insight structure")

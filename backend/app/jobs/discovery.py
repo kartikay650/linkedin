@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.llm.relevance import score_post
-from app.models import Client, Creator, Post
+from app.models import Client, Creator, CreatorClient, Post
 from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
 
 # Recent posts to pull per source. Watch-creators (her hand-picked, high-priority
@@ -32,10 +32,17 @@ _GLOBAL_POSTS = 1
 _GLOBAL_LIMIT = 200
 
 
-def _active_creators(db: Session):
+def _active_creators(db: Session, client: Client):
+    """Tracked creators assigned to THIS client (via the CreatorClient join).
+    A creator is only fetched for the clients it's explicitly assigned to."""
     return (
         db.query(Creator)
-        .filter(Creator.kind == "creator", Creator.active.is_(True))
+        .join(CreatorClient, CreatorClient.creator_id == Creator.id)
+        .filter(
+            CreatorClient.client_id == client.id,
+            Creator.kind == "creator",
+            Creator.active.is_(True),
+        )
         .order_by(Creator.id)
         .limit(_GLOBAL_LIMIT)
         .all()
@@ -70,7 +77,7 @@ def start_discovery_for_client(db: Session, client: Client) -> int:
     sources = {}
     for c in client.watch_creators:
         sources[c.profile_url] = (c.label or "", _WATCH_POSTS)
-    for g in _active_creators(db):
+    for g in _active_creators(db, client):
         sources.setdefault(g.profile_url, (g.name or "", _GLOBAL_POSTS))
 
     started = 0

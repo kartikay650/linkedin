@@ -10,6 +10,7 @@ const STEPS = ["Documents", "Identity", "Voice", "Details"];
 const empty = {
   name: "", specialty: "", linkedinUrl: "", tone: "", voiceSamples: "", topics: "",
   viewpoints: "", audience: "", keyMessages: "", ctaRules: "", guardrails: "", personalStory: "",
+  benchmarkExamples: "",
 };
 
 export default function AddClientModal({ open, onClose, onCreated }) {
@@ -112,7 +113,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         tone_profile: f.tone.trim(), voice_guide: f.tone.trim(), voice_samples: f.voiceSamples,
         viewpoints: f.viewpoints, audience: f.audience,
         key_messages: f.keyMessages, cta_rules: f.ctaRules, guardrails: f.guardrails,
-        personal_story: f.personalStory,
+        personal_story: f.personalStory, benchmark_examples: f.benchmarkExamples,
       });
       if (files.length) {
         setProgress("Saving documents…");
@@ -218,6 +219,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
           <Field textarea label="Key messages" value={f.keyMessages} onChange={(v) => set("keyMessages", v)} placeholder="Core points they want to reinforce…" />
           <Field textarea label="Guardrails" hint="Hard rules the drafter must never break" value={f.guardrails} onChange={(v) => set("guardrails", v)} placeholder="e.g. never make claims without evidence…" />
           <Field textarea label="Personal story / why" hint="Their mission and personal anecdotes — used for genuine human touch" value={f.personalStory} onChange={(v) => set("personalStory", v)} placeholder="e.g. what drew them to this field, stories they tell…" />
+          <Field textarea label="Example replies (tone benchmark)" hint="Ideal replies in their voice (and ones to avoid). Every draft is anchored to these. Optional — you can add them later under Manage." value={f.benchmarkExamples} onChange={(v) => set("benchmarkExamples", v)} placeholder={"GOOD: Good friends and love keep the heart healthy, Francesco.\nAVOID: Great post! Such an important reminder."} />
           {creators.length > 0 && (
             <div className="field">
               <label className="field-label">People we'll track for them</label>

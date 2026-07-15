@@ -95,9 +95,11 @@ Respond ONLY with JSON:
 def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str = "") -> list[dict]:
     try:
         message = _client.with_options(max_retries=1, timeout=35.0).messages.create(
-            model=settings.draft_model,
+            # Classification pass (grounded / general / unverified) — runs on the fast Haiku model,
+            # not the drafting Sonnet, so it adds little to the draft route's latency. Haiku doesn't
+            # default to thinking, so no thinking flag needed.
+            model=settings.relevance_model,
             max_tokens=1500,
-            extra_body={"thinking": {"type": "disabled"}},  # classification pass — no thinking, keeps route under 60s
             messages=[{
                 "role": "user",
                 "content": PROVENANCE_PROMPT.format(
@@ -128,29 +130,64 @@ def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str =
 
 VERIFY_PROMPT = """You are fact-checking claims in a health expert's LinkedIn comment before it is posted.
 
-You MUST use the web_search tool — search at least once for EACH claim before you decide. Never answer from \
-memory; always search first.
+For EACH claim you are given candidate studies already retrieved from PubMed (the biomedical literature database). \
+Prefer a PubMed source when one genuinely supports the claim.
+
+Process for each claim, IN ORDER:
+1. Look at its PubMed candidates. Use the web_search tool to check whether a candidate's finding actually supports \
+the claim (search its title / topic; read what it found). If one genuinely does, mark "supported" and cite that \
+study's pubmed.ncbi.nlm.nih.gov URL.
+2. If no PubMed candidate fits (or none were found), search the web and cite the single best reputable source \
+(medical body, peer-reviewed study, established health/science publication).
+You MUST search before deciding — never answer from memory.
 
 The drafted reply:
 \"\"\"
 {reply}
 \"\"\"
 
-Claims to verify, numbered:
+Claims to verify, numbered, each with its PubMed candidates:
 {claims}
 
-For each claim, in the same order, search the web and decide:
-- "supported": reputable sources back the claim or its underlying mechanism — peer-reviewed studies, medical \
-bodies, established health/science publications, or well-established concepts (e.g. circadian/ultradian rhythms, \
-cortisol, inflammation). Include the single best source URL.
+Verdicts:
+- "supported": a reputable source genuinely backs the claim or its underlying mechanism. Prefer a PubMed URL; \
+otherwise the best web source. Only mark supported if the source actually supports THIS claim, not merely a related topic.
 - "contradicted": reputable sources clearly disagree. Include the source URL.
 - "unconfirmed": after actually searching, nothing reputable supports it either way.
 
-Lean toward "supported" with a good source when the general idea is well established, even if the exact wording \
-differs. Only use "unconfirmed" when a real search turns up nothing solid.
-
 Respond ONLY with JSON, one result per claim IN ORDER:
 {{"results": [{{"verdict": "supported|contradicted|unconfirmed", "source_url": "https://...", "note": "one sentence on what the source says"}}]}}"""
+
+
+def _pubmed_candidates(claim: str, retmax: int = 3) -> list[dict]:
+    """Search PubMed (NCBI E-utilities, free/no-key) for studies matching a claim.
+    Returns [{pmid, title, url}]. Best-effort — returns [] on any failure so the
+    web-search pass still runs."""
+    base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    try:
+        es = httpx.get(
+            f"{base}/esearch.fcgi",
+            params={"db": "pubmed", "retmode": "json", "retmax": retmax, "term": claim[:300]},
+            timeout=8.0,
+        )
+        ids = es.json().get("esearchresult", {}).get("idlist", []) if es.status_code == 200 else []
+        if not ids:
+            return []
+        su = httpx.get(
+            f"{base}/esummary.fcgi",
+            params={"db": "pubmed", "retmode": "json", "id": ",".join(ids)},
+            timeout=8.0,
+        )
+        result = su.json().get("result", {}) if su.status_code == 200 else {}
+        out = []
+        for pmid in ids:
+            title = (result.get(pmid, {}) or {}).get("title", "").strip()
+            if title:
+                out.append({"pmid": pmid, "title": title, "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"})
+        return out
+    except Exception as ex:
+        print(f"[verify] pubmed lookup failed: {ex}")
+        return []
 
 
 def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
@@ -163,7 +200,17 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
     flagged = flagged[:2]  # keep the web pass small enough to finish in the serverless window
     if not flagged:
         return []
-    claims_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(flagged))
+    # PubMed-first: retrieve candidate studies per claim and hand them to the model,
+    # which confirms support via web_search before citing (falls back to a web source).
+    blocks = []
+    for i, c in enumerate(flagged):
+        cands = _pubmed_candidates(c)
+        if cands:
+            lines = "\n".join(f"   - PMID {x['pmid']}: {x['title']} ({x['url']})" for x in cands)
+            blocks.append(f"{i+1}. {c}\n   PubMed candidates:\n{lines}")
+        else:
+            blocks.append(f"{i+1}. {c}\n   PubMed candidates: none found — use the web.")
+    claims_block = "\n".join(blocks)
     # Aligned to `flagged` by index — the caller zips this onto the flagged segments,
     # so we never depend on matching the model's reworded claim text.
     fallback = [{"verdict": "unconfirmed", "source_url": "",

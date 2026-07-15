@@ -69,6 +69,14 @@ export const api = {
   addCreator: (payload) => request("/creators", { method: "POST", body: JSON.stringify(payload) }),
   updateCreator: (id, payload) => request(`/creators/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteCreator: (id) => request(`/creators/${id}`, { method: "DELETE" }),
+  setCreatorClients: (id, clientIds) =>
+    request(`/creators/${id}/clients`, { method: "PUT", body: JSON.stringify({ client_ids: clientIds }) }),
+
+  listFeedback: (clientId) => request(`/clients/${clientId}/feedback`),
+  addFeedback: (clientId, note) =>
+    request(`/clients/${clientId}/feedback`, { method: "POST", body: JSON.stringify({ note }) }),
+  deleteFeedback: (clientId, feedbackId) =>
+    request(`/clients/${clientId}/feedback/${feedbackId}`, { method: "DELETE" }),
 
   listWatchCreators: (clientId) => request(`/clients/${clientId}/watch-creators`),
   addWatchCreator: (clientId, payload) =>

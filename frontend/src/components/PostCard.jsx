@@ -29,6 +29,9 @@ export default function PostCard({ post, onActioned }) {
   const [verifying, setVerifying] = useState(null);
   // Web-verify results, kept local so a claim check never reloads the feed.
   const [provByDraft, setProvByDraft] = useState({});
+  const [noteOpen, setNoteOpen] = useState({});
+  const [noteText, setNoteText] = useState({});
+  const [savingNote, setSavingNote] = useState(null);
 
   // Drafts still being worked (drafted or scientist-approved, not yet posted/rejected).
   const workingDrafts = post.drafts.filter((d) => d.status === "pending" || d.status === "approved");
@@ -79,6 +82,24 @@ export default function PostCard({ post, onActioned }) {
       onActioned();
     } catch (e) {
       toast(`Couldn't save that: ${e.message}. Try again.`);
+    }
+  };
+
+  // Capture a correction for this client. It's auto-applied to every future draft
+  // for the client (see the drafter's operator-guidance block); prune in Manage profile.
+  const handleSaveNote = async (draft) => {
+    const note = (noteText[draft.id] || "").trim();
+    if (!note) return;
+    setSavingNote(draft.id);
+    try {
+      await api.addFeedback(post.client_id, note);
+      toast("Saved. New drafts for this client will follow it.");
+      setNoteText((p) => ({ ...p, [draft.id]: "" }));
+      setNoteOpen((p) => ({ ...p, [draft.id]: false }));
+    } catch (e) {
+      toast(`Couldn't save note: ${e.message}. Try again.`);
+    } finally {
+      setSavingNote(null);
     }
   };
 
@@ -369,6 +390,20 @@ export default function PostCard({ post, onActioned }) {
                 Mark posted
               </button>
               <button
+                onClick={() => setNoteOpen((p) => ({ ...p, [draft.id]: !p[draft.id] }))}
+                title="Teach the AI — save a correction that applies to all future replies for this client"
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border)",
+                  background: "var(--surface)",
+                  fontSize: 13,
+                  fontWeight: 500,
+                }}
+              >
+                Teach the AI
+              </button>
+              <button
                 onClick={() => handleStatus(draft, "rejected")}
                 style={{
                   padding: "6px 12px",
@@ -384,6 +419,31 @@ export default function PostCard({ post, onActioned }) {
                 Reject
               </button>
             </div>
+
+            {noteOpen[draft.id] && (
+              <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "flex-start" }}>
+                <textarea
+                  rows={2}
+                  autoFocus
+                  placeholder="e.g. Don't open with a question. Keep it under two sentences. Never mention supplements."
+                  value={noteText[draft.id] || ""}
+                  onChange={(e) => setNoteText((p) => ({ ...p, [draft.id]: e.target.value }))}
+                  style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 6, padding: 8, fontSize: 13, lineHeight: 1.5, resize: "vertical", fontFamily: "inherit" }}
+                />
+                <button
+                  onClick={() => handleSaveNote(draft)}
+                  disabled={savingNote === draft.id || !(noteText[draft.id] || "").trim()}
+                  style={{
+                    padding: "8px 14px", borderRadius: 6, border: "none",
+                    background: "var(--primary)", color: "#fff", fontSize: 13, fontWeight: 600,
+                    opacity: savingNote === draft.id || !(noteText[draft.id] || "").trim() ? 0.55 : 1,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {savingNote === draft.id ? "Saving…" : "Save note"}
+                </button>
+              </div>
+            )}
           </div>
         ))}
     </div>
