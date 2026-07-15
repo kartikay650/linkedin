@@ -329,7 +329,7 @@ export default function PostCard({ post, onActioned }) {
 
             <ProvenancePanel segments={provByDraft[draft.id] ?? draft.provenance} verifying={verifying === draft.id} />
 
-            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
               <button
                 onClick={() => handleCopy(draft)}
                 style={{
@@ -391,17 +391,18 @@ export default function PostCard({ post, onActioned }) {
               </button>
               <button
                 onClick={() => setNoteOpen((p) => ({ ...p, [draft.id]: !p[draft.id] }))}
-                title="Teach the AI — save a correction that applies to all future replies for this client"
+                title="Give feedback — save a correction that applies to all future replies for this client"
                 style={{
                   padding: "6px 12px",
                   borderRadius: 6,
-                  border: "1px solid var(--border)",
-                  background: "var(--surface)",
+                  border: "1px solid var(--primary)",
+                  background: noteOpen[draft.id] ? "#eff4ff" : "var(--surface)",
+                  color: "var(--primary)",
                   fontSize: 13,
-                  fontWeight: 500,
+                  fontWeight: 600,
                 }}
               >
-                Teach the AI
+                {noteOpen[draft.id] ? "Close feedback" : "Give feedback"}
               </button>
               <button
                 onClick={() => handleStatus(draft, "rejected")}
