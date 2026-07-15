@@ -84,13 +84,13 @@ export default function Dashboard() {
   const selectedClient = clients.find((c) => c.id === selectedClientId);
   const isPostView = POST_VIEWS.includes(view);
 
+  // Only client-scoped views live in the tab strip now; agency-wide pages
+  // (Creators & prospects, Analytics) are top-level nav in the sidebar.
   const TABS = [
     ["active", "Queue"],
     ["approved", "Approved"],
     ["posted", "Posted"],
     ["all", "All"],
-    ["prospects", "Prospects"],
-    ["analytics", "Analytics"],
   ];
 
   return (
@@ -98,7 +98,10 @@ export default function Dashboard() {
       <Sidebar
         clients={clients}
         selectedId={selectedClientId}
-        onSelect={setSelectedClientId}
+        clientMode={isPostView}
+        activeView={view}
+        onSelectClient={(id) => { setSelectedClientId(id); setView("active"); }}
+        onNavigate={setView}
         onAddClient={() => setShowAddClient(true)}
       />
 
@@ -155,42 +158,46 @@ export default function Dashboard() {
           </header>
         )}
 
-        {(view === "prospects" || view === "analytics") && (
+        {(view === "creators" || view === "analytics") && (
           <h1 style={{ fontSize: 22, margin: "0 0 6px" }}>
-            {view === "prospects" ? "Creators & prospects" : "Analytics"}
+            {view === "creators" ? "Creators & prospects" : "Analytics"}
           </h1>
         )}
-        {view === "prospects" && (
+        {view === "creators" && (
           <div style={{ color: "var(--text-muted)", fontSize: 14, marginBottom: 20 }}>
-            The shared list every client draws from. Add your own or promote a prospect to tracked.
+            The shared master list every client draws from. Add your own or promote a prospect to tracked, then assign each creator to the clients who should see their posts.
+          </div>
+        )}
+        {view === "analytics" && (
+          <div style={{ color: "var(--text-muted)", fontSize: 14, marginBottom: 20 }}>
+            Pipeline across every client.
           </div>
         )}
 
-        {clients.length > 0 && (
+        {isPostView && selectedClient && (
           <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
-            {TABS.map(([key, label], i) => (
-              <span key={key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                {i === 4 && <span style={{ width: 1, height: 20, background: "var(--border)", margin: "0 4px" }} />}
-                <button
-                  onClick={() => setView(key)}
-                  style={{
-                    padding: "6px 14px",
-                    borderRadius: 999,
-                    border: "1px solid var(--border)",
-                    background: view === key ? "var(--primary)" : "var(--surface)",
-                    color: view === key ? "#fff" : "var(--text-muted)",
-                    fontSize: 13,
-                    fontWeight: 600,
-                  }}
-                >
-                  {label}
-                </button>
-              </span>
+            {TABS.map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setView(key)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  border: "1px solid var(--border)",
+                  background: view === key ? "var(--primary)" : "var(--surface)",
+                  color: view === key ? "#fff" : "var(--text-muted)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
             ))}
           </div>
         )}
 
-        {view === "prospects" ? (
+        {view === "creators" ? (
           <ProspectsPanel />
         ) : view === "analytics" ? (
           <AnalyticsPanel />
