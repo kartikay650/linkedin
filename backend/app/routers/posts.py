@@ -67,8 +67,9 @@ def list_posts_for_client(
         posts = [p for p in posts if not has(p, "approved") and not has(p, "posted")]
     elif view == "all":
         pass
-    else:  # "active" — the working queue: hide anything already posted/live
-        posts = [p for p in posts if not has(p, "posted")]
+    else:  # "active" — the working queue: only posts still needing work. Once a draft is
+        # approved it moves to the Approved tab (and once posted, to Posted), so it leaves here.
+        posts = [p for p in posts if not has(p, "approved") and not has(p, "posted")]
     return posts
 
 
