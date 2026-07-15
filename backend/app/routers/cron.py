@@ -25,10 +25,15 @@ def cron_sync_all(authorization: str = Header(default=""), db: Session = Depends
     if not settings.cron_secret or authorization != f"Bearer {settings.cron_secret}":
         raise HTTPException(401, "invalid cron secret")
 
-    deadline = time.monotonic() + 45.0
+    # Each client's sync now fires the full creator list (~35s). Only start a new
+    # client while we're still early enough that one more full client can't push us
+    # past the 60s function cap. At 1-2 clients this covers everyone every morning;
+    # at many clients it covers as many as fit and the rest catch up next run / on
+    # a manual sync (a queue is the unbounded-scale follow-up).
+    start = time.monotonic()
     clients_synced = runs_started = 0
     for client in db.query(Client).order_by(Client.id).all():
-        if time.monotonic() > deadline:
+        if time.monotonic() - start > 20.0:
             break
         try:
             runs_started += start_discovery_for_client(db, client)

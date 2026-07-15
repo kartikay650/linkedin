@@ -24,11 +24,12 @@ from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as ap
 # sync surfaces the field without flooding the feed.
 _WATCH_POSTS = 3
 _GLOBAL_POSTS = 1
-# Firing an actor run per creator is a synchronous POST each; cap how many the
-# shared database contributes per sync so the request stays under the serverless
-# ceiling and the free Apify tier isn't swamped. Full coverage is a follow-up
-# batched/scheduled job. Watch-creators are always fired on top of this.
-_GLOBAL_LIMIT = 40
+# Firing an actor run per creator is a synchronous POST each (~0.4s), so the whole
+# loop must finish inside the 60s serverless ceiling. ~90 fetches ≈ ~35s, which
+# fits with margin, so we cover the full shared list per client. (At many clients
+# the daily cron works within a time budget — see cron.py — and true unbounded
+# scale is the batched/queued follow-up.)
+_GLOBAL_LIMIT = 200
 
 
 def _active_creators(db: Session):
