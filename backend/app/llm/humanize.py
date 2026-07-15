@@ -39,8 +39,16 @@ Also remove these LinkedIn-comment tells specifically:
 - The author's name at the start. Names go at the end after a comma, only when natural.
 - Praise / summary openers: "Great post", "Great point", "Love this", "Insightful", "Absolutely", "Couldn't agree more", "What stood out to me is", "You make a great point about".
 - Evaluating how the post was written ("the way you've framed this", "you've articulated this", "your observation about X"). React to the idea, not the author's performance.
-- The nominalized-insight formula: [abstract noun phrase] + is + [meta-claim about what most people or frameworks miss]. Say the point plainly instead.
+- The nominalized-insight formula: [abstract noun phrase wrapping the post] + is + [meta-claim about what most people/frameworks miss, or how significant it is]. This is the single most common tell. It includes openers like "The idea that...", "The gap between X and Y...", "The question of whether...", "The distinction between X and Y...", "That gap between X and Y is where...", closed by "...is the part most frameworks don't account for", "...is something most people don't measure", "...is where most of my job happens". Say the point plainly instead. Rewrite these exactly like the GOOD versions:
+  BAD: "The gap between feeling alive and merely being alive is something most health frameworks don't measure."
+  GOOD: "Most health metrics stop at alive and never get near what it means to actually feel good."
+  BAD: "The question of whether we're reducing weight or improving metabolic function is one that applies well beyond PCOS."
+  GOOD: "Weight loss and metabolic health are not the same thing, and it shows up way beyond PCOS."
+  BAD: "That gap between a p-value and a person is where most of my job happens."
+  GOOD: "Physicians remember the one patient whose result made no sense on paper. That's usually when the science starts to matter to them."
 - "Reminder" framing ("powerful reminder", "serves as a reminder"), rarity flattery ("rare to see", "so refreshing"), abstract gratitude ("thanks for these valuable insights").
+
+GOLDEN RULE: react to the SUBJECT of the post, not to the post itself or how it was written. Pick ONE specific thing from the post. If the comment could sit under any post in this niche, rewrite it so it only makes sense under this one.
 
 Keep it committed and specific — a real expert takes a position, they don't hedge into mush. No emoji unless the \
 voice explicitly uses them. Keep it to at most three sentences. Do not make it longer than the original.

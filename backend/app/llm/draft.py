@@ -1,6 +1,7 @@
 import anthropic
 
 from app.config import settings
+from app.llm.humanize import humanize_comments
 from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES
 from app.llm.utils import extract_json
 from app.models import Client, Post
@@ -123,8 +124,8 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
         model=settings.draft_model,
         max_tokens=800,
         # Disable server-side default thinking (via extra_body — the pinned SDK predates the kwarg).
-        # The house-style prompt + few-shot (which now carry the humanizer's AI-tell bans) do the
-        # work in this one call — no separate humanize pass, so the route is a single generation call.
+        # Generation focuses on substance/stance; the humanizer pass below then rewrites for how it
+        # reads (a dedicated cleanup pass enforces the structural bans far better than one overloaded call).
         extra_body={"thinking": {"type": "disabled"}},
         messages=[{
             "role": "user",
@@ -143,9 +144,10 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
     )
     try:
         data = extract_json(message)
-        return [str(d) for d in data["drafts"] if str(d).strip()]
+        drafts = [str(d) for d in data["drafts"] if str(d).strip()]
     except (ValueError, KeyError):
         return []
+    return humanize_comments(drafts, _voice_block(client))
 
 
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:
@@ -170,6 +172,8 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     )
     try:
         data = extract_json(message)
-        return str(data["draft"])
+        revised = str(data["draft"])
     except (ValueError, KeyError):
         return current_text
+    out = humanize_comments([revised], _voice_block(client))
+    return out[0] if out else revised

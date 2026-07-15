@@ -28,7 +28,9 @@ LANGUAGE — never use:
 - the author's name at the START (names go at the END, after a comma, only when it reads naturally)
 - "Thanks for sharing" unless tied to a specific piece of work ("thanks for sharing this publication")
 
-BANNED STRUCTURE — the nominalized-insight formula. Never write [abstract noun phrase wrapping the post] + [is] + [meta-claim about what most people or frameworks miss, or how significant it is]. For example never "The idea that X is the part most frameworks don't account for", "The gap between X and Y is something most people don't measure", "The distinction between X and Y is one that still gets lost". Just say the thing plainly, the way a person would say it out loud.
+BANNED STRUCTURE — the nominalized-insight formula. Never write [abstract noun phrase wrapping the post] + [is] + [meta-claim about what most people or frameworks miss, or how significant it is]. For example never "The idea that X is the part most frameworks don't account for", "The gap between X and Y is something most people don't measure", "That gap between X and Y is where most of my job happens", "The distinction between X and Y is one that still gets lost". Just say the thing plainly, the way a person would say it out loud. Rewrite like the GOOD version:
+- BAD: "The gap between feeling alive and merely being alive is something most health frameworks don't measure." GOOD: "Most health metrics stop at alive and never get near what it means to actually feel good."
+- BAD: "That gap between a p-value and a person is where most of my job happens." GOOD: "Physicians remember the one patient whose result made no sense on paper. That's usually when the science starts to matter to them."
 
 SEVEN SLOP PATTERNS — never, verbatim or paraphrased:
 1. Craft evaluation ("you've articulated this beautifully", "the way you've framed this", "your observation about X")
@@ -126,13 +128,20 @@ def check_violations(text: str) -> list[str]:
         v.append(f"too long ({_sentence_count(t)} sentences)")
     if (
         re.search(r"\bit'?s not\b.{0,40}\bit'?s\b", low)
-        or re.search(r"\bnot just\b.{0,30}\bbut\b", low)
+        or re.search(r"\bnot just\b", low)
+        or re.search(r"\band not just\b", low)
         or re.search(r"\bisn'?t\b.{0,40}\bit'?s\b", low)
         or re.search(r"\bnot\b[^.,]{0,40},\s*(it'?s|it is|but|rather)\b", low)
     ):
         v.append("negation-as-device (say what it is, not what it isn't)")
-    # nominalized-insight formula: "the ... is the/a ... that most/don't/few ..."
-    if re.search(r"\bthe\b.{3,60}\bis (the|a|one|what|something)\b.{0,60}(most|don'?t|few|still|would|wouldn'?t|no one|nobody)\b", low):
+    # nominalized-insight formula: [the/this/that + abstract noun] + is + [meta-claim about
+    # what most/others miss]. Kept within one sentence ([^.]) and gated on a real meta-claim
+    # marker so plain "the X is how Y happens" sentences don't trip it.
+    if (
+        re.search(r"\b(the|this|that|these|those)\b[^.]{3,70}\bis (the|a|an|one|what|where|something|how|why)\b[^.]{0,70}(most|don'?t|few|still|would|wouldn'?t|no one|nobody|rarely|hardly|isn'?t)\b", low)
+        # the classic nominalizing openers from V2 — these + between/of/from + "is" are the tell.
+        or re.search(r"\b(gap|distinction|shift|tension) (between|of|from)\b[^.]{0,60}\bis\b", low)
+    ):
         v.append("nominalized-insight structure")
     for opener in _PRAISE_OPENERS:
         if low.startswith(opener):
