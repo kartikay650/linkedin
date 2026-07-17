@@ -61,6 +61,7 @@ function ClientDetailsSection({ client, onUpdated }) {
   const [name, setName] = useState(client.name);
   const [specialty, setSpecialty] = useState(client.specialty);
   const [linkedinUrl, setLinkedinUrl] = useState(client.linkedin_url || "");
+  const [company, setCompany] = useState(client.company || "");
   const [topics, setTopics] = useState(client.topics.join(", "));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -70,6 +71,7 @@ function ClientDetailsSection({ client, onUpdated }) {
     setName(client.name);
     setSpecialty(client.specialty);
     setLinkedinUrl(client.linkedin_url || "");
+    setCompany(client.company || "");
     setTopics(client.topics.join(", "));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client.id]);
@@ -83,6 +85,7 @@ function ClientDetailsSection({ client, onUpdated }) {
         name: name.trim(),
         specialty: specialty.trim(),
         linkedin_url: linkedinUrl.trim() || null,
+        company: company.trim(),
         topics: topics.split(",").map((t) => t.trim()).filter(Boolean),
       });
       setSaved(true);
@@ -116,6 +119,20 @@ function ClientDetailsSection({ client, onUpdated }) {
             onChange={(e) => setLinkedinUrl(e.target.value)}
             placeholder="https://www.linkedin.com/in/..."
           />
+        </div>
+        <div>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>
+            Company
+          </label>
+          <input
+            style={{ ...inputStyle, width: "100%" }}
+            value={company}
+            onChange={(e) => setCompany(e.target.value)}
+            placeholder="e.g. GlycanAge"
+          />
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+            Clients with the same company never see each other's posts (or their own) in their feed.
+          </div>
         </div>
         <div>
           <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>

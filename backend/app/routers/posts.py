@@ -8,6 +8,7 @@ from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft
 from app.llm.provenance import annotate_provenance, verify_claims
 from app.models import Client, ClientDocument, Draft, Post
+from app.profiles import excluded_author_slugs, profile_slug
 from app.scraper.apify_client import account_usage
 from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
 
@@ -53,6 +54,17 @@ def list_posts_for_client(
         return dt >= cutoff
 
     posts = [p for p in posts if recent(p)]
+
+    # Hide the client's own posts and same-company colleagues' posts (safety net that
+    # also covers anything fetched before this rule existed). See app/profiles.py.
+    client = db.get(Client, client_id)
+    if client:
+        excluded = excluded_author_slugs(db, client)
+        if excluded:
+            posts = [
+                p for p in posts
+                if (profile_slug(p.author_profile_url) or profile_slug(p.source_ref)) not in excluded
+            ]
 
     def has(post, status):
         return any(d.status == status for d in post.drafts)

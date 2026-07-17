@@ -9,6 +9,7 @@ class ClientOut(BaseModel):
     name: str
     specialty: str
     linkedin_url: Optional[str]
+    company: Optional[str] = None
     tone_profile: str
     topics: list[str]
     voice_guide: Optional[str] = None
@@ -29,6 +30,7 @@ class ClientCreate(BaseModel):
     name: str
     specialty: str
     linkedin_url: Optional[str] = None
+    company: Optional[str] = None
     tone_profile: str = ""
     topics: list[str] = []
     # Optional structured brand fields (set when created from an extracted doc).
@@ -47,6 +49,7 @@ class ClientUpdate(BaseModel):
     name: Optional[str] = None
     specialty: Optional[str] = None
     linkedin_url: Optional[str] = None
+    company: Optional[str] = None
     tone_profile: Optional[str] = None
     topics: Optional[list[str]] = None
     voice_guide: Optional[str] = None

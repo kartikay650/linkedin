@@ -8,7 +8,7 @@ const looksLikeTimeout = (msg) => /fetch|timeout|timed out|504|network/i.test(ms
 const STEPS = ["Documents", "Identity", "Voice", "Details"];
 
 const empty = {
-  name: "", specialty: "", linkedinUrl: "", tone: "", voiceSamples: "", topics: "",
+  name: "", specialty: "", linkedinUrl: "", company: "", tone: "", voiceSamples: "", topics: "",
   viewpoints: "", audience: "", keyMessages: "", ctaRules: "", guardrails: "", personalStory: "",
   benchmarkExamples: "",
 };
@@ -109,6 +109,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       const client = await api.createClient({
         name: f.name.trim(), specialty: f.specialty.trim(),
         linkedin_url: f.linkedinUrl.trim() || null,
+        company: f.company.trim(),
         topics: f.topics.split(",").map((t) => t.trim()).filter(Boolean),
         tone_profile: f.tone.trim(), voice_guide: f.tone.trim(), voice_samples: f.voiceSamples,
         viewpoints: f.viewpoints, audience: f.audience,
@@ -196,6 +197,7 @@ export default function AddClientModal({ open, onClose, onCreated }) {
           <Field label="Name" value={f.name} onChange={(v) => set("name", v)} placeholder="Dr. Jane Smith" />
           <Field label="Specialty" value={f.specialty} onChange={(v) => set("specialty", v)} placeholder="Cardiology" />
           <Field label="LinkedIn profile" hint="Optional" value={f.linkedinUrl} onChange={(v) => set("linkedinUrl", v)} placeholder="https://www.linkedin.com/in/..." />
+          <Field label="Company" hint="Optional. Clients sharing a company never see each other's posts (or their own) in their feed." value={f.company} onChange={(v) => set("company", v)} placeholder="e.g. GlycanAge" />
           {error && <ErrorLine text={error} />}
           <Footer left={<button className="btn btn-ghost" onClick={back}>Back</button>} right={<button className="btn btn-primary" onClick={next}>Continue</button>} />
         </div>
