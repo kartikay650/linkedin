@@ -70,16 +70,21 @@ Respond ONLY with JSON:
 
 # Cap combined source text so one extraction call stays well under the serverless
 # time limit even when several long docs (e.g. a full interview transcript) are
-# uploaded at once. ~60k chars ≈ 15k tokens — plenty of signal for a brand profile.
-_MAX_SOURCE_CHARS = 60000
+# uploaded at once. ~45k chars ≈ 11k tokens — plenty of signal for a brand profile,
+# and small enough that generation reliably finishes inside the 60s function ceiling.
+_MAX_SOURCE_CHARS = 45000
 
 
 def extract_brand_profile(client: Client, documents: list[ClientDocument]) -> dict:
     sources = "\n\n---\n\n".join(d.extracted_text for d in documents if d.extracted_text)
     sources = sources[:_MAX_SOURCE_CHARS]
-    message = _client.messages.create(
+    # Bounded so the route never hits Vercel's 60s wall (which surfaced to the operator
+    # as "that took too long to read"): thinking off, output capped, own 52s timeout so
+    # a slow call fails cleanly (retry / paste) instead of a hard 504.
+    message = _client.with_options(max_retries=1, timeout=52.0).messages.create(
         model=settings.draft_model,
-        max_tokens=8000,
+        max_tokens=5000,
+        extra_body={"thinking": {"type": "disabled"}},
         messages=[{
             "role": "user",
             "content": PROMPT.format(name=client.name, specialty=client.specialty, sources=sources),

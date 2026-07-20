@@ -7,6 +7,17 @@ const looksLikeTimeout = (msg) => /fetch|timeout|timed out|504|network/i.test(ms
 
 const STEPS = ["Documents", "Identity", "Voice", "Details"];
 
+// Documents are gathered in this order, each in its own sub-step. Extraction still
+// runs once over all of them together, so the profile quality is unchanged.
+const DOC_CATS = [
+  { key: "revamp", title: "LinkedIn revamp", sub: "Their LinkedIn revamp or intake document." },
+  { key: "brief", title: "Project brief", sub: "The project brief or strategy overview." },
+  { key: "science", title: "Science docs & transcripts", sub: "Papers, podcast transcripts, or post documents that show how they talk. Optional." },
+];
+
+const ALLOWED = [".pdf", ".docx", ".txt"];
+const MAX_MB = 4; // Vercel rejects request bodies over ~4.5MB before they reach us
+
 const empty = {
   name: "", specialty: "", linkedinUrl: "", company: "", tone: "", voiceSamples: "", topics: "",
   viewpoints: "", audience: "", keyMessages: "", ctaRules: "", guardrails: "", personalStory: "",
@@ -15,7 +26,8 @@ const empty = {
 
 export default function AddClientModal({ open, onClose, onCreated }) {
   const [step, setStep] = useState(0);
-  const [files, setFiles] = useState([]);
+  const [docCat, setDocCat] = useState(0); // which document sub-step (0..2) within step 0
+  const [docFiles, setDocFiles] = useState({ revamp: [], brief: [], science: [] });
   const [pastedText, setPastedText] = useState("");
   const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(false);
@@ -25,45 +37,60 @@ export default function AddClientModal({ open, onClose, onCreated }) {
   const [creators, setCreators] = useState([]);
   const [f, setF] = useState(empty);
 
+  const allFiles = [...docFiles.revamp, ...docFiles.brief, ...docFiles.science];
+
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
-  const reset = () => { setStep(0); setFiles([]); setPastedText(""); setReading(false); setSaving(false); setError(null); setProgress(null); setCreators([]); setF(empty); };
+  const reset = () => {
+    setStep(0); setDocCat(0); setDocFiles({ revamp: [], brief: [], science: [] });
+    setPastedText(""); setReading(false); setSaving(false); setError(null); setProgress(null);
+    setCreators([]); setF(empty);
+  };
   const close = () => { reset(); onClose(); };
 
-  const addFiles = (list) => {
+  const catKey = DOC_CATS[docCat].key;
+  const addFilesTo = (key, list) => {
     const chosen = Array.from(list || []).filter((x) => /\.(pdf|docx|txt)$/i.test(x.name));
-    if (chosen.length) setFiles((prev) => [...prev, ...chosen]);
+    if (chosen.length) setDocFiles((prev) => ({ ...prev, [key]: [...prev[key], ...chosen] }));
   };
-  const removeFile = (i) => setFiles((prev) => prev.filter((_, idx) => idx !== i));
+  const removeFileFrom = (key, i) =>
+    setDocFiles((prev) => ({ ...prev, [key]: prev[key].filter((_, idx) => idx !== i) }));
 
-  const extractAndContinue = async () => {
-    setError(null);
-    if (files.length === 0 && !pastedText.trim()) { setStep(1); return; } // fill manually
-    // Validate up front so the operator gets a clear reason, not a vague failure.
-    const ALLOWED = [".pdf", ".docx", ".txt"];
-    const MAX_MB = 4; // Vercel rejects request bodies over ~4.5MB before they reach us
-    for (const f of files) {
-      const ext = (f.name.slice(f.name.lastIndexOf(".")) || "").toLowerCase();
+  const validate = (list) => {
+    for (const file of list) {
+      const ext = (file.name.slice(file.name.lastIndexOf(".")) || "").toLowerCase();
       if (!ALLOWED.includes(ext)) {
-        const msg = `"${f.name}" is not a supported type. Please upload PDF, DOCX, or TXT (a .doc or Google/Pages doc won't work — export it to PDF first).`;
-        setError(msg); toast(msg); return;
+        return `"${file.name}" is not a supported type. Please upload PDF, DOCX, or TXT (a .doc or Google/Pages doc won't work — export it to PDF first).`;
       }
-      if (f.size > MAX_MB * 1024 * 1024) {
-        const msg = `"${f.name}" is ${(f.size / 1048576).toFixed(1)}MB. Each file must be under ${MAX_MB}MB — compress the PDF or split it, then upload again.`;
-        setError(msg); toast(msg); return;
+      if (file.size > MAX_MB * 1024 * 1024) {
+        return `"${file.name}" is ${(file.size / 1048576).toFixed(1)}MB. Each file must be under ${MAX_MB}MB — compress the PDF or split it, then upload again.`;
       }
     }
+    return null;
+  };
+
+  // "Continue" inside the Documents step. Earlier sub-steps just validate + advance;
+  // the last one reads every uploaded file (small per-file requests) and extracts once.
+  const handleDocContinue = async () => {
+    setError(null);
+    const bad = validate(docFiles[catKey]);
+    if (bad) { setError(bad); toast(bad); return; }
+
+    if (docCat < DOC_CATS.length - 1) { setDocCat(docCat + 1); return; }
+
+    // Last sub-step: extract from everything, or skip to manual entry if nothing given.
+    if (allFiles.length === 0 && !pastedText.trim()) { setStep(1); return; }
+
     setReading(true);
     try {
-      // Read each file's text one at a time (keeps each request small), then
-      // extract from the combined text. Pasted text is included as-is.
-      let combined = pastedText.trim() ? pastedText.trim() + "\n\n---\n\n" : "";
+      let combined = "";
       const unreadable = [];
-      for (let i = 0; i < files.length; i++) {
-        setProgress(`Reading ${files[i].name} (${i + 1}/${files.length})…`);
-        const r = await api.docText(files[i]);
+      for (let i = 0; i < allFiles.length; i++) {
+        setProgress(`Reading ${allFiles[i].name} (${i + 1}/${allFiles.length})…`);
+        const r = await api.docText(allFiles[i]);
         if (r.text && r.text.trim()) combined += r.text + "\n\n---\n\n";
-        else unreadable.push(files[i].name);
+        else unreadable.push(allFiles[i].name);
       }
+      if (pastedText.trim()) combined += pastedText.trim() + "\n\n---\n\n";
       if (!combined.trim()) {
         throw new Error(
           `No readable text found in ${unreadable.join(", ") || "those files"}. ` +
@@ -74,11 +101,11 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       const p = await api.extractBrand(combined);
       setF({
         name: p.name || "", specialty: p.specialty || "",
-        linkedinUrl: "", tone: p.voice_guide || "", voiceSamples: p.voice_samples || "",
+        linkedinUrl: "", company: "", tone: p.voice_guide || "", voiceSamples: p.voice_samples || "",
         topics: Array.isArray(p.topics) ? p.topics.join(", ") : "",
         viewpoints: p.viewpoints || "", audience: p.audience || "",
         keyMessages: p.key_messages || "", ctaRules: p.cta_rules || "", guardrails: p.guardrails || "",
-        personalStory: p.personal_story || "",
+        personalStory: p.personal_story || "", benchmarkExamples: "",
       });
       setCreators(Array.isArray(p.suggested_creators) ? p.suggested_creators : []);
       setStep(1);
@@ -93,6 +120,8 @@ export default function AddClientModal({ open, onClose, onCreated }) {
       setProgress(null);
     }
   };
+
+  const docBack = () => { setError(null); if (docCat > 0) setDocCat(docCat - 1); };
 
   const next = () => {
     setError(null);
@@ -116,9 +145,9 @@ export default function AddClientModal({ open, onClose, onCreated }) {
         key_messages: f.keyMessages, cta_rules: f.ctaRules, guardrails: f.guardrails,
         personal_story: f.personalStory, benchmark_examples: f.benchmarkExamples,
       });
-      if (files.length) {
+      if (allFiles.length) {
         setProgress("Saving documents…");
-        for (const file of files) { try { await api.uploadDocument(client.id, file); } catch { /* keep going */ } }
+        for (const file of allFiles) { try { await api.uploadDocument(client.id, file); } catch { /* keep going */ } }
       }
       if (creators.length) {
         setProgress("Finding people to track…");
@@ -135,58 +164,75 @@ export default function AddClientModal({ open, onClose, onCreated }) {
     }
   };
 
+  const catFiles = docFiles[catKey];
+  const isLastCat = docCat === DOC_CATS.length - 1;
+
   return (
     <Modal open={open} onClose={close} title="Add a client" width={560}>
       <Stepper step={step} />
 
       {step === 0 && (
         <div>
-          <StepHead title="Upload their strategy docs" sub="Drop in the client's brand or strategy documents and we'll fill everything in for you. You can add more than one." />
+          <StepHead
+            title={`${docCat + 1}. ${DOC_CATS[docCat].title}`}
+            sub={DOC_CATS[docCat].sub}
+          />
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
+            Document {docCat + 1} of {DOC_CATS.length}. We read them all together at the end and fill everything in for you.
+          </div>
+
           <div
             className={`dropzone${dragging ? " drag" : ""}`}
             onClick={() => document.getElementById("wiz-file").click()}
             onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); addFilesTo(catKey, e.dataTransfer.files); }}
           >
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Drop files here, or click to choose</div>
             <div style={{ fontSize: 12, color: "var(--text-muted)" }}>PDF, Word, or text</div>
-            <input id="wiz-file" type="file" accept=".pdf,.docx,.txt" multiple style={{ display: "none" }} onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+            <input id="wiz-file" type="file" accept=".pdf,.docx,.txt" multiple style={{ display: "none" }} onChange={(e) => { addFilesTo(catKey, e.target.files); e.target.value = ""; }} />
           </div>
 
-          {files.length > 0 && (
+          {catFiles.length > 0 && (
             <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-              {files.map((file, i) => (
+              {catFiles.map((file, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg)" }}>
                   <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📄 {file.name}</span>
-                  <button className="btn btn-ghost" style={{ padding: "3px 9px", fontSize: 12 }} onClick={() => removeFile(i)}>Remove</button>
+                  <button className="btn btn-ghost" style={{ padding: "3px 9px", fontSize: 12 }} onClick={() => removeFileFrom(catKey, i)}>Remove</button>
                 </div>
               ))}
             </div>
           )}
 
-          <div style={{ marginTop: 18 }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
-              Or paste the strategy / brand doc text here — handy if a file won't upload (a Google/Word doc, a large or scanned PDF).
+          {isLastCat && (
+            <div style={{ marginTop: 18 }}>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
+                Or paste any strategy / brand doc text here — handy if a file won't upload (a Google/Word doc, a large or scanned PDF).
+              </div>
+              <textarea
+                value={pastedText}
+                onChange={(e) => setPastedText(e.target.value)}
+                rows={5}
+                placeholder="Paste any document text…"
+                style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 10, padding: 10, fontSize: 13, lineHeight: 1.5, fontFamily: "inherit", resize: "vertical" }}
+              />
             </div>
-            <textarea
-              value={pastedText}
-              onChange={(e) => setPastedText(e.target.value)}
-              rows={5}
-              placeholder="Paste the client's strategy or brand document text…"
-              style={{ width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 10, padding: 10, fontSize: 13, lineHeight: 1.5, fontFamily: "inherit", resize: "vertical" }}
-            />
-          </div>
+          )}
 
           {error && <ErrorLine text={error} />}
 
           <Footer
+            left={docCat > 0 ? <button className="btn btn-ghost" onClick={docBack} disabled={reading}>Back</button> : null}
+            leftText={docCat === 0 && allFiles.length === 0 && !pastedText.trim() ? "No docs? You can fill it in by hand." : null}
             right={
-              <button className="btn btn-primary" onClick={extractAndContinue} disabled={reading}>
-                {reading ? <><span className="spin" /> &nbsp;{progress || "Reading…"}</> : (files.length || pastedText.trim()) ? "Extract & continue" : "Continue"}
+              <button className="btn btn-primary" onClick={handleDocContinue} disabled={reading}>
+                {reading
+                  ? <><span className="spin" /> &nbsp;{progress || "Reading…"}</>
+                  : isLastCat
+                    ? ((allFiles.length || pastedText.trim()) ? "Read & continue" : "Continue")
+                    : "Continue"}
               </button>
             }
-            leftText={(files.length || pastedText.trim()) ? null : "No docs? You can fill it in by hand."}
           />
         </div>
       )}
