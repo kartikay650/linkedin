@@ -2,7 +2,7 @@ import anthropic
 
 from app.config import settings
 from app.llm.humanize import humanize_comments
-from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES
+from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES, has_negation_device
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
@@ -66,6 +66,40 @@ Operator's instruction: {instruction}
 
 Rewrite the reply to follow that instruction while staying in her exact voice and inside every house-style and \
 content-safety rule above. Respond ONLY with JSON: {{"draft": "..."}}"""
+
+
+STRIP_NEGATION_PROMPT = """The comment below uses NEGATION AS A DEVICE — defining something by what it is \
+not ("it's not X, it's Y", "it's not about X, it's about Y", "not just X but Y", "X, not Y", or the two-sentence \
+"That is not A. It is B."). Rewrite it so it states ONLY the positive claim, in the same voice and no longer than \
+the original. Never contrast against what something isn't. Keep every specific detail and the person's tone.
+
+Comment:
+\"\"\"{text}\"\"\"
+
+Respond ONLY with JSON: {{"text": "the rewritten comment"}}"""
+
+
+def _strip_negation(text: str) -> str:
+    """Hard guard: if a draft still defines things by negation, rewrite it out. Up to two
+    passes; returns the cleanest version. Only runs when the pattern is actually present,
+    so it adds no latency to already-clean drafts."""
+    out = (text or "").strip()
+    for _ in range(2):
+        if not has_negation_device(out):
+            return out
+        try:
+            message = _client.with_options(max_retries=1, timeout=30.0).messages.create(
+                model=settings.draft_model,
+                max_tokens=400,
+                extra_body={"thinking": {"type": "disabled"}},
+                messages=[{"role": "user", "content": STRIP_NEGATION_PROMPT.format(text=out)}],
+            )
+            cand = str(extract_json(message).get("text", "")).strip()
+            if cand:
+                out = cand
+        except Exception:
+            break
+    return out
 
 
 def _voice_block(client: Client) -> str:
@@ -147,7 +181,8 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
         drafts = [str(d) for d in data["drafts"] if str(d).strip()]
     except (ValueError, KeyError):
         return []
-    return humanize_comments(drafts, _voice_block(client))
+    drafts = humanize_comments(drafts, _voice_block(client))
+    return [_strip_negation(d) for d in drafts]  # hard-enforce: no negation-as-a-device
 
 
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:
@@ -176,4 +211,4 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     except (ValueError, KeyError):
         return current_text
     out = humanize_comments([revised], _voice_block(client))
-    return out[0] if out else revised
+    return _strip_negation(out[0] if out else revised)  # hard-enforce: no negation-as-a-device

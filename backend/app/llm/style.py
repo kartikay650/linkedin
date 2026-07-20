@@ -12,6 +12,8 @@ import re
 HOUSE_STYLE = """=== HOUSE STYLE (non-negotiable) ===
 Write like a real person talking, not an AI writing a caption.
 
+#1 HARD RULE — NO NEGATION AS A DEVICE. Never define something by what it is not. Banned in every form: "it's not X, it's Y", "it's not about X, it's about Y", "not just X but Y", "X, not Y", and the two-sentence version "That is not A. It is B." State ONLY the positive claim. This is the single most important rule; a reply that uses it is wrong and must be rewritten.
+
 GOLDEN RULE: react to the SUBJECT of the post, not to the post itself. A human reacts to the idea; AI reacts to the author's performance. If the reply evaluates the post ("well framed", "great point") instead of engaging with what it is about, it is wrong.
 
 SPECIFICITY: pick ONE specific thing from THIS post and react to that. If the reply could be pasted under any other post in this space, rewrite it.
@@ -123,6 +125,25 @@ def _sentence_count(text: str) -> int:
     return len(parts)
 
 
+# Negation-as-a-device — the "it's not X, it's Y" family. Hard-banned everywhere.
+_NEG_DEVICE_RES = [
+    re.compile(r"\bit'?s not\b[^.]{0,60}\bit'?s\b"),
+    re.compile(r"\b(that|this|it) is not\b[^.]{0,90}\.\s*(it|that|this) is\b"),
+    re.compile(r"\bis not\b[^.]{0,70},\s*(it'?s|it is|but|rather)\b"),
+    re.compile(r"\bisn'?t\b[^.]{0,70}\b(it'?s|it is)\b"),
+    re.compile(r"\bnot just\b[^.]{0,60}\bbut\b"),
+    re.compile(r"\bnot only\b[^.]{0,70}\bbut\b"),
+    re.compile(r"\bnot about\b[^.]{0,60}\babout\b"),
+    re.compile(r",\s*not\s+(a|an|the|just|about|because)\b"),
+]
+
+
+def has_negation_device(text: str) -> bool:
+    """True if the text uses negation as a rhetorical device (define-by-what-it-isn't)."""
+    low = (text or "").lower()
+    return any(r.search(low) for r in _NEG_DEVICE_RES)
+
+
 def check_violations(text: str) -> list[str]:
     """Return a list of house-style violations in a draft. Empty list = clean."""
     t = (text or "").strip()
@@ -136,13 +157,7 @@ def check_violations(text: str) -> list[str]:
         v.append("emoji")
     if _sentence_count(t) > 3:
         v.append(f"too long ({_sentence_count(t)} sentences)")
-    if (
-        re.search(r"\bit'?s not\b.{0,40}\bit'?s\b", low)
-        or re.search(r"\bnot just\b", low)
-        or re.search(r"\band not just\b", low)
-        or re.search(r"\bisn'?t\b.{0,40}\bit'?s\b", low)
-        or re.search(r"\bnot\b[^.,]{0,40},\s*(it'?s|it is|but|rather)\b", low)
-    ):
+    if has_negation_device(t) or re.search(r"\bnot just\b", low):
         v.append("negation-as-device (say what it is, not what it isn't)")
     # nominalized-insight formula: [the/this/that + abstract noun] + is + [meta-claim about
     # what most/others miss]. Kept within one sentence ([^.]) and gated on a real meta-claim

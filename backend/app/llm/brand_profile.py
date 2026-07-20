@@ -12,6 +12,12 @@ which posts are worth the client commenting on, and (2) drafting comment replies
 like this person and stay on-brand. Extract ONLY what the source material actually supports — do not invent \
 positions, facts, or claims. If a section is thin, keep it short rather than padding it.
 
+HARD RULE — NO NEGATION AS A DEVICE anywhere in your output. Never phrase anything as "it's not X, it's Y", \
+"it's not about X, it's about Y", "not just X but Y", "X, not Y", or "That is not A. It is B.". This applies \
+especially to voice_guide (do NOT describe the style as using such refusals/contrasts, and do NOT include any \
+sample phrasing that uses them) and to voice_samples (when choosing verbatim lines, skip any that define \
+something by what it is not — pick positive-claim lines instead). State everything as a positive claim.
+
 Client (may be blank — infer from the material if so): {name}, {specialty}
 
 Source material:
