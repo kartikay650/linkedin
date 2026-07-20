@@ -9,8 +9,7 @@ import ProspectsPanel from "../components/ProspectsPanel.jsx";
 import AnalyticsPanel from "../components/AnalyticsPanel.jsx";
 import Toaster from "../components/Toaster.jsx";
 import { toast } from "../toast.js";
-
-const POST_VIEWS = ["active", "approved", "posted", "all"];
+import { STAGES, POST_VIEWS } from "../status.js";
 
 export default function Dashboard() {
   const [clients, setClients] = useState([]);
@@ -86,12 +85,7 @@ export default function Dashboard() {
 
   // Only client-scoped views live in the tab strip now; agency-wide pages
   // (Creators & prospects, Analytics) are top-level nav in the sidebar.
-  const TABS = [
-    ["active", "Queue"],
-    ["approved", "Approved"],
-    ["posted", "Posted"],
-    ["all", "All"],
-  ];
+  const TABS = POST_VIEWS.map((key) => [key, STAGES[key].label]);
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
@@ -176,24 +170,28 @@ export default function Dashboard() {
 
         {isPostView && selectedClient && (
           <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
-            {TABS.map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setView(key)}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 999,
-                  border: "1px solid var(--border)",
-                  background: view === key ? "var(--primary)" : "var(--surface)",
-                  color: view === key ? "#fff" : "var(--text-muted)",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                {label}
-              </button>
-            ))}
+            {TABS.map(([key, label]) => {
+              const meta = STAGES[key];
+              const selected = view === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setView(key)}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: 999,
+                    border: `1px solid ${selected ? meta.color : "transparent"}`,
+                    background: selected ? meta.color : meta.bg,
+                    color: selected ? "#fff" : meta.color,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         )}
 

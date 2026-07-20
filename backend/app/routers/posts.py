@@ -74,14 +74,17 @@ def list_posts_for_client(
     elif view == "approved":
         # Scientist-approved and waiting to be posted (not yet live).
         posts = [p for p in posts if has(p, "approved") and not has(p, "posted")]
+    elif view == "draft":
+        # A reply has been drafted and is awaiting approval (not yet approved/posted).
+        posts = [p for p in posts if has(p, "pending") and not has(p, "approved") and not has(p, "posted")]
     elif view == "needs_review":
-        # Nothing approved or posted yet — still needs a human to work it.
+        # Legacy alias: nothing approved or posted yet.
         posts = [p for p in posts if not has(p, "approved") and not has(p, "posted")]
     elif view == "all":
         pass
-    else:  # "active" — the working queue: only posts still needing work. Once a draft is
-        # approved it moves to the Approved tab (and once posted, to Posted), so it leaves here.
-        posts = [p for p in posts if not has(p, "approved") and not has(p, "posted")]
+    else:  # "active" — the Queue: fresh posts with no working draft yet. Once a reply is
+        # drafted it moves to Draft, then Approved, then Posted, so it leaves the Queue.
+        posts = [p for p in posts if not has(p, "pending") and not has(p, "approved") and not has(p, "posted")]
     return posts
 
 

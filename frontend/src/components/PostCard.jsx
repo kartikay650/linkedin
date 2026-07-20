@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { toast } from "../toast.js";
 import Badge from "./Badge.jsx";
+import { STAGES, postStage, draftStage } from "../status.js";
 
 function initials(name) {
   return (name || "?")
@@ -36,6 +37,7 @@ export default function PostCard({ post, onActioned }) {
   // Drafts still being worked (drafted or scientist-approved, not yet posted/rejected).
   const workingDrafts = post.drafts.filter((d) => d.status === "pending" || d.status === "approved");
   const postedDraft = post.drafts.find((d) => d.status === "posted");
+  const stage = postStage(post); // active | draft | approved | posted
 
   const TWEAKS = [
     ["Shorter", "make it shorter, one or two sentences at most"],
@@ -138,9 +140,11 @@ export default function PostCard({ post, onActioned }) {
   };
 
   const handleDraftReply = async () => {
+    const wasUndrafted = workingDrafts.length === 0; // fresh post in the Queue
     setDrafting(true);
     try {
       const drafts = await api.draftReply(post.id);
+      if (wasUndrafted) toast("Reply drafted. It's now in the Draft tab, ready for review.");
       onActioned();
       maybeVerify(Array.isArray(drafts) ? drafts[0] : null);
     } catch (e) {
@@ -228,9 +232,16 @@ export default function PostCard({ post, onActioned }) {
         <Badge tone={relevanceTone(post.relevance_score ?? 0)}>
           relevance {Math.round((post.relevance_score ?? 0) * 10)}/10
         </Badge>
-        {postedDraft && <Badge tone="success">Posted</Badge>}
-        {!postedDraft && workingDrafts.some((d) => d.status === "approved") && (
-          <Badge tone="primary">Approved for posting</Badge>
+        {stage !== "active" && (
+          <span
+            style={{
+              display: "inline-flex", alignItems: "center", padding: "2px 10px",
+              borderRadius: 999, fontSize: 12, fontWeight: 600,
+              background: STAGES[stage].bg, color: STAGES[stage].color,
+            }}
+          >
+            {STAGES[stage].label}
+          </span>
         )}
       </div>
       {post.relevance_reason && (
@@ -269,6 +280,7 @@ export default function PostCard({ post, onActioned }) {
             style={{
               background: "var(--bg)",
               border: "1px solid var(--border)",
+              borderLeft: `4px solid ${STAGES[draftStage(draft)].color}`,
               borderRadius: 8,
               padding: 12,
               marginTop: 10,
