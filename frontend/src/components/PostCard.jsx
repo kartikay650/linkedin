@@ -34,8 +34,8 @@ export default function PostCard({ post, onActioned }) {
   const [noteText, setNoteText] = useState({});
   const [savingNote, setSavingNote] = useState(null);
 
-  // Drafts still being worked (drafted or scientist-approved, not yet posted/rejected).
-  const workingDrafts = post.drafts.filter((d) => d.status === "pending" || d.status === "approved");
+  // Drafts still being worked: generated (pending), moved to draft, or approved — not posted/rejected.
+  const workingDrafts = post.drafts.filter((d) => ["pending", "drafted", "approved"].includes(d.status));
   const postedDraft = post.drafts.find((d) => d.status === "posted");
   const stage = postStage(post); // active | draft | approved | posted
 
@@ -140,12 +140,10 @@ export default function PostCard({ post, onActioned }) {
   };
 
   const handleDraftReply = async () => {
-    const wasUndrafted = workingDrafts.length === 0; // fresh post in the Queue
     setDrafting(true);
     try {
       const drafts = await api.draftReply(post.id);
-      if (wasUndrafted) toast("Reply drafted. It's now in the Draft tab, ready for review.");
-      onActioned();
+      onActioned(); // stays in the Queue; the generated reply just appears on the card
       maybeVerify(Array.isArray(drafts) ? drafts[0] : null);
     } catch (e) {
       toast(`Couldn't generate a reply: ${e.message}. Try again in a moment.`);
@@ -370,6 +368,23 @@ export default function PostCard({ post, onActioned }) {
               >
                 {drafting ? "Regenerating…" : "Regenerate"}
               </button>
+              {draft.status === "pending" && (
+                <button
+                  onClick={() => handleStatus(draft, "drafted")}
+                  title="Park this for review — moves the post to the Draft tab"
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    border: `1px solid ${STAGES.draft.color}`,
+                    background: STAGES.draft.bg,
+                    color: STAGES.draft.color,
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  Move to draft
+                </button>
+              )}
               {draft.status !== "approved" && (
                 <button
                   onClick={() => handleStatus(draft, "approved")}

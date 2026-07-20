@@ -16,7 +16,8 @@ class BurnerStatus(str, enum.Enum):
 
 
 class DraftStatus(str, enum.Enum):
-    pending = "pending"
+    pending = "pending"      # generated, still sitting in the Queue
+    drafted = "drafted"      # explicitly moved to the Draft tab for review
     approved = "approved"
     rejected = "rejected"
     posted = "posted"

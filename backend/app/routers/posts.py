@@ -75,16 +75,18 @@ def list_posts_for_client(
         # Scientist-approved and waiting to be posted (not yet live).
         posts = [p for p in posts if has(p, "approved") and not has(p, "posted")]
     elif view == "draft":
-        # A reply has been drafted and is awaiting approval (not yet approved/posted).
-        posts = [p for p in posts if has(p, "pending") and not has(p, "approved") and not has(p, "posted")]
+        # Explicitly moved to Draft for review (status "drafted"), not yet approved/posted.
+        # A freshly generated reply is "pending" and stays in the Queue — it only lands here
+        # when someone clicks "Move to draft".
+        posts = [p for p in posts if has(p, "drafted") and not has(p, "approved") and not has(p, "posted")]
     elif view == "needs_review":
         # Legacy alias: nothing approved or posted yet.
         posts = [p for p in posts if not has(p, "approved") and not has(p, "posted")]
     elif view == "all":
         pass
-    else:  # "active" — the Queue: fresh posts with no working draft yet. Once a reply is
-        # drafted it moves to Draft, then Approved, then Posted, so it leaves the Queue.
-        posts = [p for p in posts if not has(p, "pending") and not has(p, "approved") and not has(p, "posted")]
+    else:  # "active" — the Queue: posts not moved to draft / approved / posted. A generated
+        # (pending) reply stays here so you can review or approve it without it disappearing.
+        posts = [p for p in posts if not has(p, "drafted") and not has(p, "approved") and not has(p, "posted")]
     return posts
 
 

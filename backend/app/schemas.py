@@ -189,7 +189,7 @@ class DraftOut(BaseModel):
 
 class DraftUpdate(BaseModel):
     edited_text: Optional[str] = None
-    status: Optional[str] = None  # "approved" | "rejected" | "posted"
+    status: Optional[str] = None  # "drafted" | "approved" | "rejected" | "posted"
 
 
 class RefineDraftRequest(BaseModel):
