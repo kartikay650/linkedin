@@ -66,7 +66,7 @@ def update_creator(creator_id: int, payload: CreatorUpdate, db: Session = Depend
 @router.put("/{creator_id}/clients", response_model=CreatorOut)
 def set_creator_clients(creator_id: int, payload: CreatorClientsUpdate, db: Session = Depends(get_db)):
     """Set exactly which clients this creator is assigned to. The creator's posts are
-    only pulled for these clients (see discovery._active_creator_links)."""
+    only pulled for these clients (see discovery.plan_profiles)."""
     creator = db.get(Creator, creator_id)
     if not creator:
         raise HTTPException(404, "creator not found")

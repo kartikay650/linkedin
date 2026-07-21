@@ -10,6 +10,7 @@ import AnalyticsPanel from "../components/AnalyticsPanel.jsx";
 import Toaster from "../components/Toaster.jsx";
 import { toast } from "../toast.js";
 import { STAGES, POST_VIEWS } from "../status.js";
+import { runSync } from "../syncRunner.js";
 
 export default function Dashboard() {
   const [clients, setClients] = useState([]);
@@ -57,21 +58,25 @@ export default function Dashboard() {
   const handleSync = async () => {
     setSyncing(true);
     setSyncError(null);
-    setSyncNote(null);
+    setSyncNote("Working out what's due…");
     try {
-      const res = await api.syncClient(selectedClientId);
-      if (res && res.status === "started") {
-        // Posts arrive shortly after the fetch finishes; refresh a few times.
-        setSyncNote("Fetching posts. New ones will appear here in a minute or so.");
+      // Same batched, deduped engine as "Sync all", scoped to this client.
+      const { total } = await runSync({
+        clientId: selectedClientId,
+        onProgress: (p) => {
+          if (p.phase === "empty") setSyncNote("Nothing new due right now — everything was fetched recently.");
+          else if (p.phase === "done") setSyncNote(`Queued ${p.total} profiles. New posts appear here in a minute or so.`);
+          else if (p.phase === "firing") setSyncNote(`Queued ${p.done} / ${p.total} profiles…`);
+        },
+      });
+      if (total > 0) {
         for (let i = 0; i < 6; i++) {
           await new Promise((r) => setTimeout(r, 15000));
           loadPosts(true);
         }
-        setSyncNote("Finished checking. If nothing new showed up, there may be no new posts yet — try Sync again in a bit.");
-        setTimeout(() => setSyncNote(null), 8000);
-      } else {
-        loadPosts();
+        setSyncNote("Finished checking. New posts, if any, are in the Queue.");
       }
+      setTimeout(() => setSyncNote(null), 8000);
     } catch (e) {
       setSyncError(e.message || "Sync failed.");
       toast(`Sync failed: ${e.message || "unknown error"}. Please try again.`);

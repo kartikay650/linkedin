@@ -10,37 +10,44 @@
 The browser/burner path is gone — Apify is the only provider now.
 """
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.llm.relevance import score_post
-from app.models import Client, Creator, CreatorClient, Post
+from app.models import Client, Creator, CreatorClient, Post, WatchCreator
 from app.profiles import is_own_or_colleague_post
 from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
 
-# Recent posts to pull per source. Watch-creators (her hand-picked, high-priority
-# profiles) get more; the shared creator database gets one recent post each so a
-# sync surfaces the field without flooding the feed.
+# Recent posts to pull per source. Watch-creators (hand-picked, high-priority) get
+# more; the shared creator database gets one recent post each so a sync surfaces the
+# field without flooding the feed.
 _WATCH_POSTS = 3
 _GLOBAL_POSTS = 1
-_GLOBAL_LIMIT = 200
 
-# Cadence: minimum days between re-fetching a shared creator, by how often they post.
-# This is the spend control — infrequent posters aren't re-scraped on every sync.
-# "yes" posters are fetched often (fresh, catches new posts within the 5-day feed
-# window); "sometimes"/"no" much less. Tune here to trade freshness vs cost.
+# Cadence: minimum days between re-fetching a profile, by how often they post. This
+# is the spend control — infrequent posters aren't re-scraped on every sync. Tracked
+# per PROFILE (Creator.last_fetched_at), so a profile shared by N clients is scraped
+# once per its window and fanned out to all of them, never N times. Tune here.
 _FETCH_CADENCE_DAYS = {"yes": 2, "sometimes": 7, "no": 30}
 _DEFAULT_CADENCE_DAYS = 7
 
+# Each /sync/fire request fires runs until this wall-clock budget, then returns the
+# rest for the next request. Well under Vercel's 60s ceiling so a batch can never be
+# killed mid-flight regardless of network latency (the real robustness lever).
+_FIRE_BUDGET_SECONDS = 35.0
+_FIRE_CALL_TIMEOUT = 10.0  # per start_actor POST — fail fast to failover, don't hang
 
-def _cadence_due(link: CreatorClient, now: datetime) -> bool:
-    """Is this creator due for a re-fetch for this client, given its posting frequency?"""
-    freq = (link.creator.post_frequency or "sometimes").lower()
+
+def _creator_due(creator: Creator, now: datetime) -> bool:
+    """Is this profile due for a re-fetch, given how often they post and when we last
+    scraped them (globally, across all clients)?"""
+    freq = (creator.post_frequency or "sometimes").lower()
     days = _FETCH_CADENCE_DAYS.get(freq, _DEFAULT_CADENCE_DAYS)
-    last = link.last_fetched_at
+    last = creator.last_fetched_at
     if last is None:
         return True
     if last.tzinfo is None:
@@ -48,22 +55,74 @@ def _cadence_due(link: CreatorClient, now: datetime) -> bool:
     return (now - last) >= timedelta(days=days)
 
 
-def _active_creator_links(db: Session, client: Client):
-    """CreatorClient links for tracked creators assigned to THIS client (creator eager-
-    loaded), so the caller can read post_frequency / last_fetched_at for cadence."""
-    return (
-        db.query(CreatorClient)
-        .join(Creator, Creator.id == CreatorClient.creator_id)
-        .options(joinedload(CreatorClient.creator))
-        .filter(
-            CreatorClient.client_id == client.id,
-            Creator.kind == "creator",
-            Creator.active.is_(True),
-        )
-        .order_by(CreatorClient.creator_id)
-        .limit(_GLOBAL_LIMIT)
-        .all()
+def plan_profiles(db: Session, client: Client | None = None) -> list[dict]:
+    """The de-duplicated work-list for a sync: unique profile URLs to fetch, each once.
+    Universal (client=None) covers every client; client-scoped covers just that client.
+
+    Sources = watch-creators (always fetched, high-priority) + tracked creators that
+    are DUE by cadence AND assigned to at least one client (fetching an unassigned
+    creator would waste credit — no feed to fan out to). Deduped by URL, so a profile
+    tracked by several clients appears once."""
+    now = datetime.now(timezone.utc)
+    profiles: dict[str, dict] = {}
+
+    def add(url, label, posts):
+        url = (url or "").strip()
+        if not url:
+            return
+        cur = profiles.get(url)
+        if cur is None:
+            profiles[url] = {"url": url, "label": label or "", "posts": posts}
+        else:
+            cur["posts"] = max(cur["posts"], posts)
+            cur["label"] = cur["label"] or (label or "")
+
+    watch = list(client.watch_creators) if client is not None else db.query(WatchCreator).all()
+    for wc in watch:
+        add(wc.profile_url, wc.label, _WATCH_POSTS)
+
+    cq = (
+        db.query(Creator)
+        .join(CreatorClient, CreatorClient.creator_id == Creator.id)
+        .filter(Creator.kind == "creator", Creator.active.is_(True))
     )
+    if client is not None:
+        cq = cq.filter(CreatorClient.client_id == client.id)
+    for c in cq.distinct().all():
+        if _creator_due(c, now):
+            add(c.profile_url, c.name, _GLOBAL_POSTS)
+
+    return list(profiles.values())
+
+
+def fire_profiles(db: Session, profiles: list[dict], time_budget_s: float = _FIRE_BUDGET_SECONDS) -> tuple[int, list[dict]]:
+    """Fire an Apify run per profile (fan-out webhook, so the posts land for EVERY
+    client tracking that URL). Time-bounded: stops at the budget and returns the rest,
+    so a single request never risks the 60s serverless kill. Stamps last_fetched_at on
+    success so the next sync respects cadence. Returns (attempted_count, remaining)."""
+    now = datetime.now(timezone.utc)
+    start = time.monotonic()
+    urls = [p["url"] for p in profiles]
+    by_url = {c.profile_url: c for c in db.query(Creator).filter(Creator.profile_url.in_(urls)).all()} if urls else {}
+
+    attempted = 0
+    for i, p in enumerate(profiles):
+        if time.monotonic() - start > time_budget_s:
+            db.commit()
+            return attempted, profiles[i:]
+        url, label, posts = p["url"], p.get("label", ""), p.get("posts", _GLOBAL_POSTS)
+        payload = _build_input(url, posts)
+        webhook = _build_webhook(url, label)
+        try:
+            start_actor(settings.apify_actor_id, payload, webhook=webhook, timeout=_FIRE_CALL_TIMEOUT)
+            c = by_url.get(url)
+            if c is not None:
+                c.last_fetched_at = now  # stamp only on success; failures stay due and retry next sync
+        except ApifyError as e:
+            print(f"[sync] couldn't start run for {label or url}: {e}")
+        attempted += 1
+    db.commit()
+    return attempted, []
 
 
 def run_discovery_for_client(db: Session, client: Client) -> int:
@@ -84,49 +143,20 @@ def run_discovery_for_client(db: Session, client: Client) -> int:
 
 
 def start_discovery_for_client(db: Session, client: Client) -> int:
-    """Webhook mode: start one actor run per tracked profile with a callback, and
-    return how many were started. Posts arrive later via /apify/webhook.
-
-    Sources = this client's hand-picked watch-creators (always fetched) PLUS the
-    shared creators assigned to this client that are DUE per their posting cadence
-    (the spend control — infrequent posters are skipped until due)."""
-    now = datetime.now(timezone.utc)
-    # (url, label, max_posts, link) — dedupe by URL; watch-creators win and carry no
-    # cadence link (they always fetch). `link` lets us stamp last_fetched_at after firing.
-    sources = {}
-    for c in client.watch_creators:
-        sources[c.profile_url] = (c.label or "", _WATCH_POSTS, None)
-    skipped_not_due = 0
-    for link in _active_creator_links(db, client):
-        g = link.creator
-        if g.profile_url in sources:
-            continue
-        if not _cadence_due(link, now):
-            skipped_not_due += 1
-            continue
-        sources[g.profile_url] = (g.name or "", _GLOBAL_POSTS, link)
-
-    started = 0
-    for url, (label, max_posts, link) in sources.items():
-        payload = _build_input(url, max_posts)
-        webhook = _build_webhook(client.id, label, url)
-        try:
-            start_actor(settings.apify_actor_id, payload, webhook=webhook)
-            if link is not None:
-                link.last_fetched_at = now  # only stamp shared creators; watch always refetch
-            started += 1
-        except ApifyError as e:
-            print(f"[apify] couldn't start run for {label or url}: {e}")
-    db.commit()  # persist cadence stamps so the next sync respects them
-    if skipped_not_due:
-        print(f"[sync] client {client.id}: fired {started}, skipped {skipped_not_due} not due for re-fetch")
-    return started
+    """Webhook mode, client-scoped (used by the daily cron / one-shot callers): fire this
+    client's due profiles and return how many were attempted. The batched UI uses
+    plan_profiles + fire_profiles directly. Posts arrive later via /apify/webhook."""
+    attempted, _remaining = fire_profiles(db, plan_profiles(db, client))
+    return attempted
 
 
-def _build_webhook(client_id: int, creator_label: str, source_ref: str) -> dict:
-    # payloadTemplate is JSON-with-placeholders: our own fields (baked in now) plus
-    # Apify's {{resource}} (the finished run object, which carries defaultDatasetId).
-    literal = json.dumps({"client_id": client_id, "creator_label": creator_label, "source_ref": source_ref})
+def _build_webhook(source_ref: str, creator_label: str = "") -> dict:
+    # Fan-out webhook: we bake only the profile URL (source_ref), NOT a client id — when
+    # the run finishes, the handler saves the posts for EVERY client tracking this URL,
+    # so a profile fetched once lands in all their feeds.
+    # payloadTemplate is JSON-with-placeholders: our fields plus Apify's {{resource}}
+    # (the finished run object, which carries defaultDatasetId).
+    literal = json.dumps({"creator_label": creator_label, "source_ref": source_ref})
     template = literal[:-1] + ', "resource": {{resource}}}'
     base = settings.public_base_url.rstrip("/")
     return {

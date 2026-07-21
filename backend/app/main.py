@@ -2,7 +2,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth import require_user
-from app.routers import analytics, clients, creators, cron, posts, webhooks
+from app.routers import analytics, clients, creators, cron, posts, sync, webhooks
 
 app = FastAPI(title="LinkedIn Engagement Dashboard API")
 
@@ -21,6 +21,7 @@ app.include_router(clients.router, dependencies=_auth)
 app.include_router(posts.router, dependencies=_auth)
 app.include_router(creators.router, dependencies=_auth)
 app.include_router(analytics.router, dependencies=_auth)
+app.include_router(sync.router, dependencies=_auth)
 app.include_router(webhooks.router)
 app.include_router(cron.router)  # own secret (Vercel Cron bearer), no user auth
 

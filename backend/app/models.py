@@ -98,6 +98,10 @@ class Creator(Base):
     # How often they post: "yes" (weekly+), "sometimes" (monthly-ish), "no" (rarely).
     # Drives how often sync re-fetches them, to control scraping spend.
     post_frequency = Column(String, default="sometimes")
+    # Global last-fetch time for this profile. Cadence is per-PROFILE (not per client):
+    # the profile is scraped once per its window and the posts fan out to every client
+    # tracking it, so a profile shared by N clients is never scraped N times.
+    last_fetched_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     client_links = relationship("CreatorClient", back_populates="creator", cascade="all, delete-orphan")

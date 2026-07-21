@@ -116,9 +116,11 @@ def run_actor_raw(profile_url: str, limit: int) -> list[dict]:
     return run_actor(settings.apify_actor_id, _build_input(profile_url, limit))
 
 
-def start_actor(actor_id: str, payload: dict, webhook: dict | None = None) -> str:
+def start_actor(actor_id: str, payload: dict, webhook: dict | None = None, timeout: float = 60) -> str:
     """Fire-and-forget: start an actor run and return its run id. Tries each account
-    until one accepts the run (failover on exhausted credit)."""
+    until one accepts the run (failover on exhausted credit). `timeout` bounds each
+    POST — the batched sync passes a short one so a hung call fails fast to failover
+    instead of eating the serverless time budget."""
     toks = _tokens()
     if not toks:
         raise ApifyError("no Apify token configured")
@@ -129,7 +131,7 @@ def start_actor(actor_id: str, payload: dict, webhook: dict | None = None) -> st
         if webhook:
             params["webhooks"] = base64.b64encode(json.dumps([webhook]).encode()).decode()
         try:
-            r = httpx.post(f"{API_ROOT}/acts/{actor}/runs", params=params, json=payload, timeout=60)
+            r = httpx.post(f"{API_ROOT}/acts/{actor}/runs", params=params, json=payload, timeout=timeout)
             if r.status_code >= 400:
                 last = ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:300]}")
                 continue

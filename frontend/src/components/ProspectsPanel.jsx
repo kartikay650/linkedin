@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { toast } from "../toast.js";
+import { runSync } from "../syncRunner.js";
 
 // The shared, agency-wide creator database. Prospects (lead-gen targets) and
 // tracked creators (fetched + commented on) live here. Operators add their own
@@ -15,6 +16,17 @@ export default function ProspectsPanel() {
   const [kind, setKind] = useState("prospect");
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
+  const [sync, setSync] = useState(null); // {done, total, phase}
+
+  const handleSyncAll = async () => {
+    if (sync && sync.phase === "firing") return; // already running
+    setSync({ done: 0, total: 0, phase: "planning" });
+    try {
+      await runSync({ onProgress: setSync });
+    } catch (e) {
+      toast(`Sync hit a snag: ${e.message}. Already-queued profiles keep fetching; try again for the rest.`);
+    }
+  };
 
   const load = () => {
     setLoading(true);
@@ -139,8 +151,48 @@ export default function ProspectsPanel() {
     </div>
   );
 
+  const busy = sync && (sync.phase === "firing" || sync.phase === "planning");
+  const pct = sync && sync.total ? Math.round((sync.done / sync.total) * 100) : 0;
+
   return (
     <div>
+      <div style={{ marginBottom: 20, padding: 14, border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Sync all tracked profiles</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, maxWidth: 640 }}>
+              Fetches every due profile once and adds fresh posts to all clients tracking them. Infrequent posters are skipped until they're due, to keep scraping cost down.
+            </div>
+          </div>
+          <button
+            onClick={handleSyncAll}
+            disabled={busy}
+            style={{ ...pillBtn, background: busy ? "#93b4f8" : "var(--primary)", color: "#fff", border: "none", padding: "9px 16px", whiteSpace: "nowrap" }}
+          >
+            {busy ? "Syncing…" : "Sync all"}
+          </button>
+        </div>
+        {sync && sync.phase !== "empty" && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ height: 6, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ width: `${pct}%`, height: "100%", background: "var(--primary)", transition: "width .3s" }} />
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
+              {sync.phase === "planning"
+                ? "Working out what's due…"
+                : sync.phase === "done"
+                  ? `Queued all ${sync.total} profiles. New posts arrive over the next few minutes.`
+                  : `Queued ${sync.done} / ${sync.total} profiles for fetching…`}
+            </div>
+          </div>
+        )}
+        {sync && sync.phase === "empty" && (
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
+            Nothing due right now — everything tracked was fetched recently.
+          </div>
+        )}
+      </div>
+
       <form onSubmit={add} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 24, alignItems: "center" }}>
         <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} style={{ ...inp, width: 180 }} />
         <input placeholder="LinkedIn profile URL" value={url} onChange={(e) => setUrl(e.target.value)} style={{ ...inp, flex: 1, minWidth: 240 }} />

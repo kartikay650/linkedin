@@ -61,6 +61,8 @@ export const api = {
     request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify({ instruction }) }),
   verifyClaims: (draftId) => request(`/drafts/${draftId}/verify-claims`, { method: "POST" }),
   syncClient: (clientId) => request(`/clients/${clientId}/sync`, { method: "POST" }),
+  syncPlan: (clientId) => request("/sync/plan", { method: "POST", body: JSON.stringify({ client_id: clientId ?? null }) }),
+  syncFire: (profiles) => request("/sync/fire", { method: "POST", body: JSON.stringify({ profiles }) }),
   dismissPost: (postId) => request(`/posts/${postId}/dismiss`, { method: "POST" }),
   apifyUsage: () => request("/apify-usage"),
   analytics: () => request("/analytics"),
