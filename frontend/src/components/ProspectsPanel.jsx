@@ -14,6 +14,7 @@ export default function ProspectsPanel() {
   const [url, setUrl] = useState("");
   const [kind, setKind] = useState("prospect");
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
 
   const load = () => {
     setLoading(true);
@@ -36,8 +37,10 @@ export default function ProspectsPanel() {
     }
   };
 
-  const prospects = creators.filter((c) => c.kind === "prospect");
-  const tracked = creators.filter((c) => c.kind === "creator");
+  const q = query.trim().toLowerCase();
+  const match = (c) => !q || `${c.name || ""} ${c.headline || ""} ${c.profile_url || ""}`.toLowerCase().includes(q);
+  const prospects = creators.filter((c) => c.kind === "prospect" && match(c));
+  const tracked = creators.filter((c) => c.kind === "creator" && match(c));
 
   const add = async (e) => {
     e.preventDefault();
@@ -126,6 +129,23 @@ export default function ProspectsPanel() {
           {saving ? "Adding…" : "Add"}
         </button>
       </form>
+
+      <div style={{ position: "relative", marginBottom: 18 }}>
+        <input
+          placeholder="Search the list by name, headline, or profile…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ ...inp, width: "100%", boxSizing: "border-box", paddingRight: 68 }}
+        />
+        {query && (
+          <button
+            onClick={() => setQuery("")}
+            style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", border: "none", background: "none", color: "var(--text-muted)", fontSize: 12, cursor: "pointer" }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
 
       {loading ? (
         <div style={{ color: "var(--text-muted)", fontSize: 14 }}>Loading…</div>
