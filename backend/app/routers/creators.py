@@ -32,12 +32,14 @@ def add_creator(payload: CreatorCreate, db: Session = Depends(get_db)):
     existing = db.query(Creator).filter(Creator.profile_url == url).first()
     if existing:
         return existing
+    freq = payload.post_frequency if payload.post_frequency in ("yes", "sometimes", "no") else "sometimes"
     creator = Creator(
         name=(payload.name or "").strip(),
         profile_url=url,
         headline=payload.headline or "",
         kind=payload.kind if payload.kind in ("creator", "prospect") else "creator",
         active=True,
+        post_frequency=freq,
     )
     db.add(creator)
     db.commit()
@@ -54,6 +56,8 @@ def update_creator(creator_id: int, payload: CreatorUpdate, db: Session = Depend
         creator.kind = payload.kind
     if payload.active is not None:
         creator.active = payload.active
+    if payload.post_frequency in ("yes", "sometimes", "no"):
+        creator.post_frequency = payload.post_frequency
     db.commit()
     db.refresh(creator)
     return creator
@@ -62,7 +66,7 @@ def update_creator(creator_id: int, payload: CreatorUpdate, db: Session = Depend
 @router.put("/{creator_id}/clients", response_model=CreatorOut)
 def set_creator_clients(creator_id: int, payload: CreatorClientsUpdate, db: Session = Depends(get_db)):
     """Set exactly which clients this creator is assigned to. The creator's posts are
-    only pulled for these clients (see discovery._active_creators)."""
+    only pulled for these clients (see discovery._active_creator_links)."""
     creator = db.get(Creator, creator_id)
     if not creator:
         raise HTTPException(404, "creator not found")

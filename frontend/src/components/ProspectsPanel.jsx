@@ -39,6 +39,17 @@ export default function ProspectsPanel() {
 
   const q = query.trim().toLowerCase();
   const match = (c) => !q || `${c.name || ""} ${c.headline || ""} ${c.profile_url || ""}`.toLowerCase().includes(q);
+  // How often a tracked creator posts — controls fetch cadence (spend).
+  const setFreq = async (c, freq) => {
+    setCreators((prev) => prev.map((x) => (x.id === c.id ? { ...x, post_frequency: freq } : x)));
+    try {
+      await api.updateCreator(c.id, { post_frequency: freq });
+    } catch (err) {
+      toast(`Couldn't update frequency: ${err.message}`);
+      load();
+    }
+  };
+
   const prospects = creators.filter((c) => c.kind === "prospect" && match(c));
   const tracked = creators.filter((c) => c.kind === "creator" && match(c));
 
@@ -84,6 +95,18 @@ export default function ProspectsPanel() {
                 {c.profile_url.replace("https://www.linkedin.com", "").replace(/\/$/, "")}
               </a>
             </div>
+            {assignable && (
+              <select
+                value={c.post_frequency || "sometimes"}
+                onChange={(e) => setFreq(c, e.target.value)}
+                title="How often they post — controls how often we re-fetch them (fewer fetches = lower cost)"
+                style={{ ...pillBtn, padding: "6px 8px", cursor: "pointer" }}
+              >
+                <option value="yes">Weekly+</option>
+                <option value="sometimes">Monthly</option>
+                <option value="no">Rarely</option>
+              </select>
+            )}
             {assignable && (
               <div style={{ position: "relative" }}>
                 <button onClick={() => setAssignOpen(assignOpen === c.id ? null : c.id)} style={pillBtn}>
@@ -153,7 +176,7 @@ export default function ProspectsPanel() {
         <>
           <Section
             title="Tracked creators"
-            subtitle="Assign each creator to the clients who should see their posts. Only assigned clients get them, ranked by relevance."
+            subtitle="Assign each creator to the clients who should see their posts (only assigned clients get them). Set how often they post — frequent posters are fetched often, rare ones seldom, to keep scraping cost down."
             rows={tracked}
             promoteTo="prospect"
             promoteLabel="Move to prospects"

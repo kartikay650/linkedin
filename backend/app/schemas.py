@@ -105,6 +105,7 @@ class CreatorOut(BaseModel):
     headline: str
     kind: str
     active: bool
+    post_frequency: str = "sometimes"  # "yes" | "sometimes" | "no" — drives fetch cadence
     client_ids: list[int] = []  # clients this creator is assigned to (fanned out only to these)
 
     class Config:
@@ -116,11 +117,13 @@ class CreatorCreate(BaseModel):
     profile_url: str
     headline: str = ""
     kind: str = "creator"  # "creator" (track + comment) | "prospect" (lead-gen)
+    post_frequency: Optional[str] = None
 
 
 class CreatorUpdate(BaseModel):
     kind: Optional[str] = None
     active: Optional[bool] = None
+    post_frequency: Optional[str] = None
 
 
 class CreatorClientsUpdate(BaseModel):

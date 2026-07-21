@@ -95,6 +95,9 @@ class Creator(Base):
     headline = Column(String, default="")  # tier / notes from the source list
     kind = Column(String, default="creator")  # "creator" | "prospect"
     active = Column(Boolean, default=True)
+    # How often they post: "yes" (weekly+), "sometimes" (monthly-ish), "no" (rarely).
+    # Drives how often sync re-fetches them, to control scraping spend.
+    post_frequency = Column(String, default="sometimes")
     created_at = Column(DateTime, server_default=func.now())
 
     client_links = relationship("CreatorClient", back_populates="creator", cascade="all, delete-orphan")
@@ -115,6 +118,9 @@ class CreatorClient(Base):
     id = Column(Integer, primary_key=True)
     creator_id = Column(Integer, ForeignKey("creators.id"), nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    # Last time this creator was fetched FOR THIS CLIENT — the cadence gate reads it so
+    # infrequent posters aren't re-scraped on every sync.
+    last_fetched_at = Column(DateTime, nullable=True)
 
     creator = relationship("Creator", back_populates="client_links")
     client = relationship("Client", back_populates="creator_links")
