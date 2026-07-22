@@ -73,6 +73,8 @@ export const api = {
   deleteCreator: (id) => request(`/creators/${id}`, { method: "DELETE" }),
   setCreatorClients: (id, clientIds) =>
     request(`/creators/${id}/clients`, { method: "PUT", body: JSON.stringify({ client_ids: clientIds }) }),
+  assignCreatorClient: (id, clientId) => request(`/creators/${id}/clients/${clientId}`, { method: "PUT" }),
+  unassignCreatorClient: (id, clientId) => request(`/creators/${id}/clients/${clientId}`, { method: "DELETE" }),
 
   listFeedback: (clientId) => request(`/clients/${clientId}/feedback`),
   addFeedback: (clientId, note) =>

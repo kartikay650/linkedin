@@ -6,6 +6,7 @@ prospect to a tracked creator — we deliberately do NOT auto-discover new profi
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
@@ -85,6 +86,38 @@ def set_creator_clients(creator_id: int, payload: CreatorClientsUpdate, db: Sess
     db.commit()
     db.refresh(creator)
     return creator
+
+
+@router.put("/{creator_id}/clients/{client_id}")
+def assign_creator_client(creator_id: int, client_id: int, db: Session = Depends(get_db)):
+    """Idempotently assign ONE client to a creator. A single-row op, so ticking several
+    clients quickly can't overwrite each other the way the full-set PUT could."""
+    if not db.get(Creator, creator_id):
+        raise HTTPException(404, "creator not found")
+    if not db.get(Client, client_id):
+        raise HTTPException(404, "client not found")
+    exists = (
+        db.query(CreatorClient)
+        .filter(CreatorClient.creator_id == creator_id, CreatorClient.client_id == client_id)
+        .first()
+    )
+    if not exists:
+        db.add(CreatorClient(creator_id=creator_id, client_id=client_id))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()  # a concurrent tick already created it — that's fine
+    return {"ok": True, "creator_id": creator_id, "client_id": client_id, "assigned": True}
+
+
+@router.delete("/{creator_id}/clients/{client_id}")
+def unassign_creator_client(creator_id: int, client_id: int, db: Session = Depends(get_db)):
+    """Idempotently unassign ONE client from a creator."""
+    db.query(CreatorClient).filter(
+        CreatorClient.creator_id == creator_id, CreatorClient.client_id == client_id
+    ).delete()
+    db.commit()
+    return {"ok": True, "creator_id": creator_id, "client_id": client_id, "assigned": False}
 
 
 @router.delete("/{creator_id}")

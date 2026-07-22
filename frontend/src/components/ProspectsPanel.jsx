@@ -36,17 +36,23 @@ export default function ProspectsPanel() {
   useEffect(load, []);
   useEffect(() => { api.listClients().then(setClients).catch(() => {}); }, []);
 
-  // Assign / unassign a tracked creator to a client (optimistic; only these
-  // clients get the creator's posts on sync).
-  const toggleClient = async (c, clientId) => {
-    const has = (c.client_ids || []).includes(clientId);
-    const next = has ? c.client_ids.filter((id) => id !== clientId) : [...(c.client_ids || []), clientId];
-    setCreators((prev) => prev.map((x) => (x.id === c.id ? { ...x, client_ids: next } : x)));
+  // Assign / unassign ONE client to a creator. Driven by the checkbox's desired state
+  // (shouldHave) and sent as a single-client add/remove — so ticking several boxes
+  // quickly can't overwrite each other (the old full-list save raced and dropped ticks).
+  const setClientAssignment = async (creatorId, clientId, shouldHave) => {
+    const apply = (add) => setCreators((prev) => prev.map((x) => {
+      if (x.id !== creatorId) return x;
+      const ids = new Set(x.client_ids || []);
+      if (add) ids.add(clientId); else ids.delete(clientId);
+      return { ...x, client_ids: [...ids] };
+    }));
+    apply(shouldHave); // optimistic
     try {
-      await api.setCreatorClients(c.id, next);
+      if (shouldHave) await api.assignCreatorClient(creatorId, clientId);
+      else await api.unassignCreatorClient(creatorId, clientId);
     } catch (err) {
-      toast(`Couldn't update assignment: ${err.message}`);
-      load();
+      apply(!shouldHave); // revert just this toggle
+      toast(`Couldn't save that change: ${err.message}. Try again.`);
     }
   };
 
@@ -152,7 +158,7 @@ export default function ProspectsPanel() {
                         <input
                           type="checkbox"
                           checked={(c.client_ids || []).includes(cl.id)}
-                          onChange={() => toggleClient(c, cl.id)}
+                          onChange={(e) => setClientAssignment(c.id, cl.id, e.target.checked)}
                         />
                         {cl.name}
                       </label>
