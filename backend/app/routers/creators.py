@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
+from app.jobs.discovery import backfill_client_creator
 from app.models import Client, Creator, CreatorClient
 from app.schemas import CreatorClientsUpdate, CreatorCreate, CreatorOut, CreatorUpdate
 
@@ -80,10 +81,15 @@ def set_creator_clients(creator_id: int, payload: CreatorClientsUpdate, db: Sess
     for cid, link in existing.items():
         if cid not in wanted:
             db.delete(link)
-    for cid in wanted:
-        if cid not in existing:
-            db.add(CreatorClient(creator_id=creator_id, client_id=cid))
+    newly_added = [cid for cid in wanted if cid not in existing]
+    for cid in newly_added:
+        db.add(CreatorClient(creator_id=creator_id, client_id=cid))
     db.commit()
+    # Backfill each newly-assigned client with this profile's recent posts we already have.
+    for cid in newly_added:
+        client = db.get(Client, cid)
+        if client:
+            backfill_client_creator(db, client, creator.profile_url)
     db.refresh(creator)
     return creator
 
@@ -107,7 +113,12 @@ def assign_creator_client(creator_id: int, client_id: int, db: Session = Depends
             db.commit()
         except IntegrityError:
             db.rollback()  # a concurrent tick already created it — that's fine
-    return {"ok": True, "creator_id": creator_id, "client_id": client_id, "assigned": True}
+    # Immediately give this client the profile's recent posts we already have (no re-scrape),
+    # so a freshly-assigned creator isn't invisible until its next cadence window.
+    creator = db.get(Creator, creator_id)
+    client = db.get(Client, client_id)
+    added = backfill_client_creator(db, client, creator.profile_url) if creator and client else 0
+    return {"ok": True, "creator_id": creator_id, "client_id": client_id, "assigned": True, "backfilled": added}
 
 
 @router.delete("/{creator_id}/clients/{client_id}")

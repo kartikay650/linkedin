@@ -147,6 +147,57 @@ def fire_profiles(db: Session, profiles: list[dict], time_budget_s: float = _FIR
     return attempted, []
 
 
+def backfill_client_creator(db: Session, client: Client, source_ref: str, max_age_days: int = 5) -> int:
+    """Give `client` the recent posts we ALREADY have for this profile URL (scraped for
+    other clients), so a newly-assigned client isn't empty and we don't re-scrape. No
+    Apify cost — reuses stored posts; scores relevance for this client. Returns # added."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    have = {
+        r[0] for r in db.query(Post.post_url)
+        .filter(Post.client_id == client.id, Post.source_ref == source_ref).all()
+    }
+    srcs: dict[str, Post] = {}
+    for p in db.query(Post).filter(Post.source_ref == source_ref).order_by(Post.fetched_at.desc()).all():
+        if p.client_id == client.id or p.post_url in have or p.post_url in srcs:
+            continue
+        dt = p.posted_at or p.fetched_at
+        if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt < cutoff:
+                continue
+        srcs[p.post_url] = p
+    added = 0
+    for p in srcs.values():
+        raw = {
+            "author_name": p.author_name, "author_profile_url": p.author_profile_url,
+            "post_url": p.post_url, "content_snippet": p.content_snippet,
+            "posted_at": p.posted_at, "engagement": p.engagement or {},
+        }
+        _save_and_process(db, client, source_ref, raw)
+        added += 1
+    return added
+
+
+def backfill_client(db: Session, client: Client, time_budget_s: float = 40.0) -> tuple[int, int]:
+    """Backfill a client from stored posts for every profile assigned to them (creators
+    + watch). Time-bounded for serverless; returns (posts_added, profiles_processed)."""
+    start = time.monotonic()
+    urls = [
+        r[0] for r in db.query(Creator.profile_url)
+        .join(CreatorClient, CreatorClient.creator_id == Creator.id)
+        .filter(CreatorClient.client_id == client.id).all()
+    ]
+    urls += [r[0] for r in db.query(WatchCreator.profile_url).filter(WatchCreator.client_id == client.id).all()]
+    added = processed = 0
+    for url in dict.fromkeys(urls):  # dedupe, preserve order
+        if time.monotonic() - start > time_budget_s:
+            break
+        added += backfill_client_creator(db, client, url)
+        processed += 1
+    return added, processed
+
+
 def run_discovery_for_client(db: Session, client: Client) -> int:
     """Polling mode: fetch each watch-creator's posts now and save them.
     Returns the number of new posts. Used when apify_use_webhooks is off."""
