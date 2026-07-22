@@ -16,6 +16,7 @@ export default function ProspectsPanel() {
   const [kind, setKind] = useState("prospect");
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
+  const [addMsg, setAddMsg] = useState(null); // {type: "error"|"ok", text}
   const [sync, setSync] = useState(null); // {done, total, phase}
 
   const handleSyncAll = async () => {
@@ -67,14 +68,31 @@ export default function ProspectsPanel() {
 
   const add = async (e) => {
     e.preventDefault();
-    if (!url.trim()) return;
+    setAddMsg(null);
+    const u = url.trim();
+    // Clear, unmissable guidance instead of silently doing nothing.
+    if (!u) {
+      setAddMsg({ type: "error", text: "Paste the person's LinkedIn profile URL (like https://www.linkedin.com/in/their-name) to save them." });
+      return;
+    }
+    if (!/linkedin\.com\/in\//i.test(u)) {
+      setAddMsg({ type: "error", text: "That doesn't look like a LinkedIn profile. The link should contain linkedin.com/in/… (a personal profile, not a company page or a search link)." });
+      return;
+    }
     setSaving(true);
     try {
-      await api.addCreator({ name: name.trim(), profile_url: url.trim(), kind });
+      const created = await api.addCreator({ name: name.trim(), profile_url: u, kind });
+      const wasDup = creators.some((c) => c.id === created.id); // addCreator returns the existing row on a duplicate URL
       setName(""); setUrl("");
-      load();
+      await load();
+      if (wasDup) {
+        const asWhat = created.kind === "creator" ? "a tracked creator" : "a prospect";
+        setAddMsg({ type: "ok", text: `${created.name || "That profile"} is already in the list (as ${asWhat}).` });
+      } else {
+        setAddMsg({ type: "ok", text: `Saved ${created.name || "profile"}.` });
+      }
     } catch (err) {
-      toast(`Couldn't add: ${err.message}`);
+      setAddMsg({ type: "error", text: err.message || "Couldn't save that profile. Please try again." });
     } finally {
       setSaving(false);
     }
@@ -204,6 +222,11 @@ export default function ProspectsPanel() {
           {saving ? "Adding…" : "Add"}
         </button>
       </form>
+      {addMsg && (
+        <div style={{ fontSize: 12, marginTop: -14, marginBottom: 16, color: addMsg.type === "error" ? "var(--danger)" : "var(--success)" }}>
+          {addMsg.text}
+        </div>
+      )}
 
       <div style={{ position: "relative", marginBottom: 18 }}>
         <input

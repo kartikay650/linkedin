@@ -26,8 +26,8 @@ def list_creators(kind: Optional[str] = Query(None), db: Session = Depends(get_d
 @router.post("", response_model=CreatorOut)
 def add_creator(payload: CreatorCreate, db: Session = Depends(get_db)):
     url = (payload.profile_url or "").strip()
-    if "linkedin.com/in/" not in url:
-        raise HTTPException(400, "a valid LinkedIn profile URL is required")
+    if "linkedin.com/in/" not in url.lower():
+        raise HTTPException(400, "That doesn't look like a LinkedIn profile. The link should contain 'linkedin.com/in/…' (a personal profile, not a company page or a search link).")
     url = url.split("?")[0].rstrip("/") + "/"  # normalise for dedup
     existing = db.query(Creator).filter(Creator.profile_url == url).first()
     if existing:
