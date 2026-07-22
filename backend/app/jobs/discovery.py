@@ -34,6 +34,9 @@ _GLOBAL_POSTS = 1
 # once per its window and fanned out to all of them, never N times. Tune here.
 _FETCH_CADENCE_DAYS = {"yes": 2, "sometimes": 7, "no": 30}
 _DEFAULT_CADENCE_DAYS = 7
+# Watch-creators are hand-picked/high-priority, so fetched more often than the shared
+# list, but still capped so a same-day re-sync doesn't re-scrape them.
+_WATCH_CADENCE_DAYS = 1
 
 # Each /sync/fire request fires runs until this wall-clock budget, then returns the
 # rest for the next request. Well under Vercel's 60s ceiling so a batch can never be
@@ -48,6 +51,14 @@ def _creator_due(creator: Creator, now: datetime) -> bool:
     freq = (creator.post_frequency or "sometimes").lower()
     days = _FETCH_CADENCE_DAYS.get(freq, _DEFAULT_CADENCE_DAYS)
     last = creator.last_fetched_at
+    if last is None:
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (now - last) >= timedelta(days=days)
+
+
+def _due_since(last, now, days) -> bool:
     if last is None:
         return True
     if last.tzinfo is None:
@@ -79,7 +90,8 @@ def plan_profiles(db: Session, client: Client | None = None) -> list[dict]:
 
     watch = list(client.watch_creators) if client is not None else db.query(WatchCreator).all()
     for wc in watch:
-        add(wc.profile_url, wc.label, _WATCH_POSTS)
+        if _due_since(wc.last_fetched_at, now, _WATCH_CADENCE_DAYS):
+            add(wc.profile_url, wc.label, _WATCH_POSTS)
 
     cq = (
         db.query(Creator)
@@ -103,7 +115,13 @@ def fire_profiles(db: Session, profiles: list[dict], time_budget_s: float = _FIR
     now = datetime.now(timezone.utc)
     start = time.monotonic()
     urls = [p["url"] for p in profiles]
-    by_url = {c.profile_url: c for c in db.query(Creator).filter(Creator.profile_url.in_(urls)).all()} if urls else {}
+    by_url = {}
+    watch_by_url: dict[str, list] = {}
+    if urls:
+        for c in db.query(Creator).filter(Creator.profile_url.in_(urls)).all():
+            by_url[c.profile_url] = c
+        for wc in db.query(WatchCreator).filter(WatchCreator.profile_url.in_(urls)).all():
+            watch_by_url.setdefault(wc.profile_url, []).append(wc)
 
     attempted = 0
     for i, p in enumerate(profiles):
@@ -115,9 +133,13 @@ def fire_profiles(db: Session, profiles: list[dict], time_budget_s: float = _FIR
         webhook = _build_webhook(url, label)
         try:
             start_actor(settings.apify_actor_id, payload, webhook=webhook, timeout=_FIRE_CALL_TIMEOUT)
+            # Stamp cadence on success only (creator AND any watch-creator with this URL);
+            # failures stay due and retry next sync.
             c = by_url.get(url)
             if c is not None:
-                c.last_fetched_at = now  # stamp only on success; failures stay due and retry next sync
+                c.last_fetched_at = now
+            for wc in watch_by_url.get(url, []):
+                wc.last_fetched_at = now
         except ApifyError as e:
             print(f"[sync] couldn't start run for {label or url}: {e}")
         attempted += 1

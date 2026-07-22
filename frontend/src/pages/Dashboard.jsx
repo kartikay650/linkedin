@@ -60,12 +60,13 @@ export default function Dashboard() {
     setSyncError(null);
     setSyncNote("Working out what's due…");
     try {
-      // Same batched, deduped engine as "Sync all", scoped to this client.
+      // Universal, deduped sync across ALL clients. Cadence means it only fetches
+      // profiles actually due, so pressing it again the same day costs ~nothing.
       const { total } = await runSync({
-        clientId: selectedClientId,
+        clientId: null,
         onProgress: (p) => {
-          if (p.phase === "empty") setSyncNote("Nothing new due right now — everything was fetched recently.");
-          else if (p.phase === "done") setSyncNote(`Queued ${p.total} profiles. New posts appear here in a minute or so.`);
+          if (p.phase === "empty") setSyncNote("Everything's up to date — nothing due to fetch (synced recently).");
+          else if (p.phase === "done") setSyncNote(`Queued ${p.total} profiles across all clients. New posts appear in a minute or so.`);
           else if (p.phase === "firing") setSyncNote(`Queued ${p.done} / ${p.total} profiles…`);
         },
       });
@@ -132,6 +133,7 @@ export default function Dashboard() {
                 <button
                   onClick={handleSync}
                   disabled={syncing}
+                  title="Fetch new posts for every client. Only pulls profiles that are due, so pressing it again the same day costs nothing."
                   style={{
                     padding: "8px 16px",
                     borderRadius: 8,
@@ -142,7 +144,7 @@ export default function Dashboard() {
                     boxShadow: "var(--shadow)",
                   }}
                 >
-                  {syncing ? "Syncing…" : "Sync now"}
+                  {syncing ? "Syncing…" : "Sync all"}
                 </button>
                 {syncNote && (
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, maxWidth: 210 }}>

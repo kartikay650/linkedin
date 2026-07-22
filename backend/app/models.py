@@ -152,6 +152,9 @@ class WatchCreator(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     profile_url = Column(String, nullable=False)
     label = Column(String, default="")
+    # Cadence gate for watch-creators too (fetched at most ~daily), so repeated syncs
+    # in a day don't re-scrape them and run up cost.
+    last_fetched_at = Column(DateTime, nullable=True)
 
     client = relationship("Client", back_populates="watch_creators")
 
