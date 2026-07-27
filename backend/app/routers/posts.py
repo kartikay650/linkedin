@@ -53,7 +53,13 @@ def list_posts_for_client(
             dt = dt.replace(tzinfo=timezone.utc)
         return dt >= cutoff
 
-    posts = [p for p in posts if recent(p)]
+    # A post with in-progress work (a drafted/approved reply, or a generated one still
+    # in the Queue) must NEVER be hidden by recency — otherwise queued drafts vanish once
+    # the underlying post ages past the window. Recency only prunes the undrafted Queue.
+    def has_working_draft(post):
+        return any(d.status in ("pending", "drafted", "approved") for d in post.drafts)
+
+    posts = [p for p in posts if recent(p) or has_working_draft(p)]
 
     # Hide the client's own posts and same-company colleagues' posts (safety net that
     # also covers anything fetched before this rule existed). See app/profiles.py.
