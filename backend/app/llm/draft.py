@@ -1,8 +1,10 @@
+import re
+
 import anthropic
 
 from app.config import settings
 from app.llm.humanize import humanize_comments
-from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES, has_negation_device
+from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES, check_violations, has_formula, has_negation_device
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
@@ -25,6 +27,8 @@ indistinguishable from something she typed herself. Not "in her style" — actua
 
 {feedback}
 
+{avoid}
+
 The post she is replying to:
 Author: {author}
 \"\"\"
@@ -34,9 +38,10 @@ Author: {author}
 Write ONE reply that:
 - sounds exactly like her voice samples above — same sentence length, rhythm, vocabulary level, and bluntness,
 - reacts to one specific thing in THIS post, never a generic reaction that could sit under any post,
-- states one of her real positions (from the brand context) where it fits, in plain spoken language,
+- is SHORT (one or two sentences, ~15-25 words) with at most one claim,
+- is structurally different from her recent comments shown above, and NEVER uses the "shows up before symptoms/diagnosis/a scan" construction,
 - obeys every house-style and content-safety rule above, and obeys her CTA rules and guardrails.
-
+{nudge}
 Respond ONLY with JSON: {{"drafts": ["your one reply"]}}"""
 
 REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, following the operator's instruction. \
@@ -153,13 +158,40 @@ def _feedback_block(client: Client) -> str:
     )
 
 
-def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
+def _avoid_block(avoid_texts: list[str] | None) -> str:
+    """Show the client's recent comments so the model writes something structurally
+    different — the core fix for the 'every comment sounds the same' repetition."""
+    texts = [t.strip() for t in (avoid_texts or []) if t and t.strip()][:12]
+    if not texts:
+        return ""
+    lines = "\n".join(f"- {t}" for t in texts)
+    return (
+        "=== RECENT COMMENTS ALREADY WRITTEN FOR THIS CLIENT — do NOT sound like these ===\n"
+        "Your reply must be clearly different from every one below: a different opening word, a "
+        "different sentence shape, a different angle. Do not reuse their phrasings, and never repeat "
+        "the 'shows up before symptoms/diagnosis/a scan' construction.\n" + lines + "\n=== END ==="
+    )
+
+
+def _opener(text: str) -> str:
+    return " ".join(re.findall(r"[a-z']+", (text or "").lower())[:3])
+
+
+def _draft_problems(text: str, avoid_texts: list[str] | None) -> list[str]:
+    """Deterministic quality gate: house-style violations (incl. the over-used template,
+    length, negation, slop) plus reusing a recent comment's opening."""
+    problems = list(check_violations(text))
+    op = _opener(text)
+    if op and any(op == _opener(t) for t in (avoid_texts or [])):
+        problems.append("same opening as a recent comment")
+    return problems
+
+
+def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str) -> str:
     message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
         model=settings.draft_model,
         max_tokens=800,
-        # Disable server-side default thinking (via extra_body — the pinned SDK predates the kwarg).
-        # Generation focuses on substance/stance; the humanizer pass below then rewrites for how it
-        # reads (a dedicated cleanup pass enforces the structural bans far better than one overloaded call).
+        # Thinking off (pinned SDK); the house style + humanizer carry the quality rules.
         extra_body={"thinking": {"type": "disabled"}},
         messages=[{
             "role": "user",
@@ -171,6 +203,8 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
                 examples=STRONG_EXAMPLES,
                 benchmark=_benchmark_block(client),
                 feedback=_feedback_block(client),
+                avoid=avoid_block,
+                nudge=("\n" + nudge if nudge else ""),
                 author=post.author_name,
                 content=post.content_snippet,
             ),
@@ -180,9 +214,31 @@ def generate_drafts(client: Client, post: Post, count: int = 2) -> list[str]:
         data = extract_json(message)
         drafts = [str(d) for d in data["drafts"] if str(d).strip()]
     except (ValueError, KeyError):
-        return []
+        return ""
     drafts = humanize_comments(drafts, _voice_block(client))
-    return [_strip_negation(d) for d in drafts]  # hard-enforce: no negation-as-a-device
+    drafts = [_strip_negation(d) for d in drafts]  # hard-enforce: no negation-as-a-device
+    return drafts[0] if drafts else ""
+
+
+def generate_drafts(client: Client, post: Post, count: int = 1, avoid_texts: list[str] | None = None) -> list[str]:
+    """Generate one reply, then self-correct once if it trips the quality gate (the
+    over-used template, too long, reused opening, slop). Bounded to one retry."""
+    avoid_block = _avoid_block(avoid_texts)
+    text = _generate_once(client, post, avoid_block, nudge="")
+    if not text:
+        return []
+    problems = _draft_problems(text, avoid_texts)
+    if problems:
+        nudge = (
+            "Your previous attempt failed for these reasons: " + "; ".join(problems) + ". "
+            "Write a COMPLETELY different comment that fixes them — different opening word, different "
+            "structure, at most one claim, one or two short sentences, and never the "
+            "'shows up before symptoms/diagnosis/a scan' construction."
+        )
+        retry = _generate_once(client, post, avoid_block, nudge=nudge)
+        if retry and len(_draft_problems(retry, avoid_texts)) < len(problems):
+            text = retry
+    return [text]
 
 
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:

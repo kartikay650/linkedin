@@ -121,7 +121,16 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     if not post:
         raise HTTPException(404, "post not found")
 
-    texts = generate_drafts(post.client, post, count=1)
+    # The client's recent drafts (across their other posts) — passed so the generator
+    # writes something structurally different and doesn't converge on one template.
+    recent = [
+        r[0] for r in db.query(Draft.text)
+        .join(Post, Post.id == Draft.post_id)
+        .filter(Post.client_id == post.client_id, Draft.post_id != post.id)
+        .order_by(Draft.created_at.desc())
+        .limit(12).all()
+    ]
+    texts = generate_drafts(post.client, post, count=1, avoid_texts=recent)
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
