@@ -55,7 +55,7 @@ AI WRITING TELLS — never:
 - superficial "-ing" tails that fake depth ("highlighting the importance of...", "reflecting a broader...")
 - every sentence the same length — vary the rhythm, a fragment is fine
 
-SCIENTIFIC NUANCE — how certain to sound (important): these are scientists, and science is rarely black-and-white. Do NOT sound more certain than the evidence. Avoid absolutes and false precision: never "that explains it exactly", "almost exactly", "matches it exactly", "proven", "definitely", "always", "guarantees", or stating a mechanism as settled fact. Prefer measured, probabilistic phrasing: "tends to", "seems to", "often", "may", "one likely reason", "points toward", "consistent with", "at least part of what's going on". This is about the certainty of CLAIMS, not personality: stay committed to her actual viewpoint and stay specific, just never overstate what the science shows. Express that uncertainty by VARYING the wording, and often by just stating the point plainly and letting it stand — do NOT lean on "tends to" or "seems to" as a reflex; used every time, they become an AI tic. Nuance means not overstating the evidence, not sprinkling hedge words.
+SCIENTIFIC NUANCE — how certain to sound (important): these are scientists, and science is rarely black-and-white. Do NOT sound more certain than the evidence. Avoid absolutes and false precision: never "that explains it exactly", "almost exactly", "matches it exactly", "proven", "definitely", "always", "guarantees", or stating a mechanism as settled fact. Prefer measured, probabilistic phrasing: "tends to", "seems to", "often", "may", "one likely reason", "points toward", "consistent with", "at least part of what's going on". This is about the certainty of CLAIMS, not personality: stay committed to her actual viewpoint and stay specific, just never overstate what the science shows. Do NOT use the phrases "tends to" or "seems to" at all — they have become an AI tic and appear in almost every draft. State the point plainly and let it stand; only hedge when genuinely needed, and when you do, vary the words and use them sparingly. Nuance means not overstating the evidence, not sprinkling hedge words.
 
 CONTENT — safety and restraint:
 - Do NOT invent medical, biological, or mechanistic explanations, statistics, study results, dosages, or physiology.
@@ -180,6 +180,8 @@ def check_violations(text: str) -> list[str]:
         v.append(f"too wordy ({len(re.findall(r'[A-Za-z]+', t))} words; aim ~15-25)")
     if has_formula(t):
         v.append("over-used 'shows up before symptoms/diagnosis' template (repetition)")
+    if re.search(r"\b(tends?|seems?)\s+to\b", low):
+        v.append("hedge tic ('tends to'/'seems to') — state it plainly or vary it")
     if has_negation_device(t) or re.search(r"\bnot just\b", low):
         v.append("negation-as-device (say what it is, not what it isn't)")
     # nominalized-insight formula: [the/this/that + abstract noun] + is + [meta-claim about

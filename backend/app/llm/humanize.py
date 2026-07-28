@@ -53,10 +53,12 @@ GOLDEN RULE: react to the SUBJECT of the post, not to the post itself or how it 
 Keep it committed on her actual viewpoint and specific — a real expert takes a position, they don't hedge into \
 mush. BUT do not sound more certain than the science: these are scientists and the field is rarely black-and-white. \
 Cut absolutes and false precision ("exactly", "almost exactly", "matches it exactly", "proven", "definitely", \
-"always", "guarantees", a mechanism stated as settled fact) and prefer measured phrasing ("tends to", "seems to", \
-"often", "may", "one likely reason", "points toward", "consistent with"). Nuance over black-and-white. This is about \
-the certainty of claims, not personality, so stay committed and specific — just don't overstate the evidence. \
-No emoji unless the voice explicitly uses them. Keep it to at most three sentences. Do not make it longer than the original.
+"always", "guarantees", a mechanism stated as settled fact). Do NOT use "tends to" or "seems to" — they have become \
+an AI tic; state the point plainly, and only hedge when genuinely needed, varying the words. Also remove the over-used \
+"[X] shows up / appears in [the body / your markers] [years / decades] before [symptoms / a diagnosis / a scan]" \
+construction — say the underlying idea a different way or drop it. Nuance means not overstating the evidence, not \
+sprinkling hedge words. Keep it SHORT: one or two sentences, roughly 15-25 words, and never longer than the original. \
+No emoji unless the voice explicitly uses them.
 
 Drafts:
 {drafts}

@@ -39,7 +39,7 @@ Write ONE reply that:
 - sounds exactly like her voice samples above — same sentence length, rhythm, vocabulary level, and bluntness,
 - reacts to one specific thing in THIS post, never a generic reaction that could sit under any post,
 - is SHORT (one or two sentences, ~15-25 words) with at most one claim,
-- is structurally different from her recent comments shown above, and NEVER uses the "shows up before symptoms/diagnosis/a scan" construction,
+- is structurally different from her recent comments shown above, and NEVER uses the "shows up before symptoms/diagnosis/a scan" construction or the words "tends to" / "seems to",
 - obeys every house-style and content-safety rule above, and obeys her CTA rules and guardrails.
 {nudge}
 Respond ONLY with JSON: {{"drafts": ["your one reply"]}}"""
