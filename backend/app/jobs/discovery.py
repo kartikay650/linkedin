@@ -66,14 +66,18 @@ def _due_since(last, now, days) -> bool:
     return (now - last) >= timedelta(days=days)
 
 
-def plan_profiles(db: Session, client: Client | None = None) -> list[dict]:
+def plan_profiles(db: Session, client: Client | None = None, force: bool = False) -> list[dict]:
     """The de-duplicated work-list for a sync: unique profile URLs to fetch, each once.
     Universal (client=None) covers every client; client-scoped covers just that client.
 
     Sources = watch-creators (always fetched, high-priority) + tracked creators that
     are DUE by cadence AND assigned to at least one client (fetching an unassigned
     creator would waste credit — no feed to fan out to). Deduped by URL, so a profile
-    tracked by several clients appears once."""
+    tracked by several clients appears once.
+
+    force=True ignores the cadence gate and includes EVERY assigned profile — the
+    on-demand 'fetch latest now' for when someone knows a creator just posted and the
+    normal (cadence-respecting) sync said nothing was due. Costs more, so it's explicit."""
     now = datetime.now(timezone.utc)
     profiles: dict[str, dict] = {}
 
@@ -90,7 +94,7 @@ def plan_profiles(db: Session, client: Client | None = None) -> list[dict]:
 
     watch = list(client.watch_creators) if client is not None else db.query(WatchCreator).all()
     for wc in watch:
-        if _due_since(wc.last_fetched_at, now, _WATCH_CADENCE_DAYS):
+        if force or _due_since(wc.last_fetched_at, now, _WATCH_CADENCE_DAYS):
             add(wc.profile_url, wc.label, _WATCH_POSTS)
 
     cq = (
@@ -101,7 +105,7 @@ def plan_profiles(db: Session, client: Client | None = None) -> list[dict]:
     if client is not None:
         cq = cq.filter(CreatorClient.client_id == client.id)
     for c in cq.distinct().all():
-        if _creator_due(c, now):
+        if force or _creator_due(c, now):
             add(c.profile_url, c.name, _GLOBAL_POSTS)
 
     return list(profiles.values())

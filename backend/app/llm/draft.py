@@ -40,6 +40,8 @@ Author: {author}
 Write ONE reply that:
 - sounds exactly like her voice samples above — same sentence length, rhythm, vocabulary level, and bluntness,
 - reacts to one specific thing in THIS post, never a generic reaction that could sit under any post,
+- MATCHES THE POST'S REGISTER: if this is a personal story, reflection, or something vulnerable, be warm and human and skip the science, data, and opinions; if it's light or casual, keep it light; bring the expert/scientific voice ONLY when the post is genuinely technical or scientific,
+- does NOT force an opinion where none is needed: default to a specific observation or a genuine question, and take a firm stance ONLY when the post is squarely about her expertise and clearly invites one,
 - is SHORT (one or two sentences, ~15-25 words) with at most one claim,
 - is structurally different from her recent comments shown above, and NEVER uses the "shows up before symptoms/diagnosis/a scan" construction or the words "tends to" / "seems to",
 - obeys every house-style and content-safety rule above, and obeys her CTA rules and guardrails.

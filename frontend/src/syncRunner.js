@@ -5,8 +5,8 @@ import { api } from "./api.js";
 // (deduped); a clientId scopes it to one client. onProgress({done, total, phase}).
 const BATCH = 30; // profiles queued per request — smooth progress; the server is also time-guarded
 
-export async function runSync({ clientId = null, onProgress } = {}) {
-  const { profiles, total } = await api.syncPlan(clientId);
+export async function runSync({ clientId = null, force = false, onProgress } = {}) {
+  const { profiles, total } = await api.syncPlan(clientId, force);
   onProgress?.({ done: 0, total, phase: total ? "firing" : "empty" });
   if (!total) return { total: 0 };
 

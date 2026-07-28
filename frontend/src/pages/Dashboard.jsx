@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState(null);
   const [syncError, setSyncError] = useState(null);
+  const [canForce, setCanForce] = useState(false);
   const [showAddClient, setShowAddClient] = useState(false);
   const [showManageClient, setShowManageClient] = useState(false);
   const [usage, setUsage] = useState([]);
@@ -55,29 +56,53 @@ export default function Dashboard() {
     loadPosts();
   }, [loadPosts]);
 
-  const handleSync = async () => {
+  const handleSync = async (force = false) => {
     setSyncing(true);
     setSyncError(null);
-    setSyncNote("Working out what's due…");
+    setCanForce(false);
+    setSyncNote(force ? "Fetching the latest from every tracked profile…" : "Working out what's due…");
     try {
-      // Universal, deduped sync across ALL clients. Cadence means it only fetches
-      // profiles actually due, so pressing it again the same day costs ~nothing.
+      // Baseline the current feed so we can tell when genuinely new posts land.
+      let baseline = posts.length;
+      if (selectedClientId) {
+        const cur = await api.listPosts(selectedClientId, view).catch(() => null);
+        if (cur) baseline = cur.length;
+      }
+      // Universal, deduped sync across ALL clients. Without force, cadence means it only
+      // fetches profiles actually due, so pressing it again the same day costs ~nothing.
+      // force=true ignores cadence and refetches everything (for "a creator just posted").
       const { total } = await runSync({
         clientId: null,
+        force,
         onProgress: (p) => {
-          if (p.phase === "empty") setSyncNote("Everything's up to date — nothing due to fetch (synced recently).");
-          else if (p.phase === "done") setSyncNote(`Queued ${p.total} profiles across all clients. New posts appear in a minute or so.`);
+          if (p.phase === "empty") setSyncNote("Everything's up to date — nothing new was due to fetch.");
+          else if (p.phase === "done") setSyncNote(`Queued ${p.total} profiles. New posts land over the next few minutes.`);
           else if (p.phase === "firing") setSyncNote(`Queued ${p.done} / ${p.total} profiles…`);
         },
       });
+      // Nothing due by cadence -> offer an explicit force fetch (LinkedIn may have new
+      // posts we skipped to save credit). This is the fix for "I synced but the latest
+      // post isn't showing": the normal sync deliberately didn't re-check recent profiles.
+      if (total === 0 && !force) setCanForce(true);
       if (total > 0) {
-        for (let i = 0; i < 6; i++) {
-          await new Promise((r) => setTimeout(r, 15000));
-          loadPosts(true);
+        // Posts arrive asynchronously via webhook and can take a few minutes. Poll the
+        // feed and STOP as soon as new posts appear, so nobody has to refresh by hand.
+        let appeared = false;
+        for (let i = 0; i < 18 && !appeared; i++) {   // up to ~3 min at 10s intervals
+          await new Promise((r) => setTimeout(r, 10000));
+          if (!selectedClientId) break;
+          const fresh = await api.listPosts(selectedClientId, view).catch(() => null);
+          if (!fresh) continue;
+          setPosts(fresh);
+          if (fresh.length > baseline) {
+            appeared = true;
+            setSyncNote(`${fresh.length - baseline} new post${fresh.length - baseline > 1 ? "s" : ""} arrived. More may still be landing.`);
+          }
         }
-        setSyncNote("Finished checking. New posts, if any, are in the Queue.");
+        if (!appeared)
+          setSyncNote("Done. Nothing new for this client yet — posts may still be arriving, check back shortly.");
       }
-      setTimeout(() => setSyncNote(null), 8000);
+      setTimeout(() => setSyncNote(null), 12000);
     } catch (e) {
       setSyncError(e.message || "Sync failed.");
       toast(`Sync failed: ${e.message || "unknown error"}. Please try again.`);
@@ -131,7 +156,7 @@ export default function Dashboard() {
               </button>
               <div>
                 <button
-                  onClick={handleSync}
+                  onClick={() => handleSync(false)}
                   disabled={syncing}
                   title="Fetch new posts for every client. Only pulls profiles that are due, so pressing it again the same day costs nothing."
                   style={{
@@ -150,6 +175,25 @@ export default function Dashboard() {
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, maxWidth: 210 }}>
                     {syncNote}
                   </div>
+                )}
+                {canForce && !syncing && (
+                  <button
+                    onClick={() => handleSync(true)}
+                    title="Ignore the daily fetch limit and re-check every tracked profile now. Use this when you know a creator just posted. Costs a little fetching credit."
+                    style={{
+                      marginTop: 6,
+                      padding: 0,
+                      border: "none",
+                      background: "none",
+                      color: "var(--accent, #2563eb)",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      textDecoration: "underline",
+                    }}
+                  >
+                    Fetch latest anyway
+                  </button>
                 )}
                 {syncError && (
                   <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6, maxWidth: 200 }}>{syncError}</div>

@@ -22,6 +22,7 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 
 class SyncPlanRequest(BaseModel):
     client_id: Optional[int] = None
+    force: bool = False  # ignore cadence, fetch every assigned profile (on-demand "fetch latest")
 
 
 class ProfileItem(BaseModel):
@@ -39,7 +40,7 @@ def sync_plan(payload: SyncPlanRequest, db: Session = Depends(get_db)):
     """Return the unique profiles due for a fetch (deduped across clients). The
     frontend fires them in small batches via /sync/fire and shows progress."""
     client = db.get(Client, payload.client_id) if payload.client_id else None
-    profiles = plan_profiles(db, client)
+    profiles = plan_profiles(db, client, force=payload.force)
     return {"profiles": profiles, "total": len(profiles)}
 
 

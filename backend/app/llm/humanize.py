@@ -50,8 +50,10 @@ Also remove these LinkedIn-comment tells specifically:
 
 GOLDEN RULE: react to the SUBJECT of the post, not to the post itself or how it was written. Pick ONE specific thing from the post. If the comment could sit under any post in this niche, rewrite it so it only makes sense under this one.
 
-Keep it committed on her actual viewpoint and specific — a real expert takes a position, they don't hedge into \
-mush. BUT do not sound more certain than the science: these are scientists and the field is rarely black-and-white. \
+Keep it specific and in her voice, but do NOT change how opinionated or how scientific each draft is: if a draft \
+is a warm, personal, or simply curious reply, keep it that way — do not make it more assertive, do not add a stance \
+or opinion it doesn't already have, and do not turn it analytical. When a draft DOES take a position, keep it \
+committed, not hedged into mush. BUT do not sound more certain than the science: these are scientists and the field is rarely black-and-white. \
 Cut absolutes and false precision ("exactly", "almost exactly", "matches it exactly", "proven", "definitely", \
 "always", "guarantees", a mechanism stated as settled fact). Do NOT use "tends to" or "seems to" — they have become \
 an AI tic; state the point plainly, and only hedge when genuinely needed, varying the words. Also remove the over-used \
