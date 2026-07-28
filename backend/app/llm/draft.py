@@ -17,6 +17,8 @@ indistinguishable from something she typed herself. Not "in her style" — actua
 {voice}
 === END ===
 
+{voice_examples}
+
 {brand}
 
 {house_style}
@@ -158,6 +160,21 @@ def _feedback_block(client: Client) -> str:
     )
 
 
+def _voice_examples_block(texts: list[str] | None) -> str:
+    """Comments the team actually approved/posted for THIS client — the learning loop's
+    gold standard. Grows as the team works, so voice fidelity improves over time without
+    manual seeding. Match their voice; don't copy their structure (stay varied)."""
+    ex = [t.strip() for t in (texts or []) if t and t.strip()][:8]
+    if not ex:
+        return ""
+    lines = "\n".join(f"- {t}" for t in ex)
+    return (
+        "=== COMMENTS THE TEAM APPROVED FOR THIS CLIENT — the gold standard for how she really sounds ===\n"
+        "Learn the voice from these: their tone, rhythm, sentence length, vocabulary, and bluntness. "
+        "Match that. But do NOT copy their structure or phrasings — stay varied.\n" + lines + "\n=== END ==="
+    )
+
+
 def _avoid_block(avoid_texts: list[str] | None) -> str:
     """Show the client's recent comments so the model writes something structurally
     different — the core fix for the 'every comment sounds the same' repetition."""
@@ -187,7 +204,7 @@ def _draft_problems(text: str, avoid_texts: list[str] | None) -> list[str]:
     return problems
 
 
-def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str) -> str:
+def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str, voice_ex_block: str = "") -> str:
     message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
         model=settings.draft_model,
         max_tokens=800,
@@ -198,6 +215,7 @@ def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str) -> 
             "content": PROMPT.format(
                 name=client.name,
                 voice=_voice_block(client),
+                voice_examples=voice_ex_block,
                 brand=_brand_block(client),
                 house_style=HOUSE_STYLE,
                 examples=STRONG_EXAMPLES,
@@ -220,10 +238,10 @@ def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str) -> 
     return drafts[0] if drafts else ""
 
 
-def _one_candidate(client: Client, post: Post, avoid: list[str], shape_nudge: str) -> str:
+def _one_candidate(client: Client, post: Post, avoid: list[str], shape_nudge: str, voice_ex_block: str) -> str:
     """One reply + a single self-correction pass if it trips the quality gate."""
     block = _avoid_block(avoid)
-    text = _generate_once(client, post, block, nudge=shape_nudge)
+    text = _generate_once(client, post, block, nudge=shape_nudge, voice_ex_block=voice_ex_block)
     if not text:
         return ""
     problems = _draft_problems(text, avoid)
@@ -236,21 +254,25 @@ def _one_candidate(client: Client, post: Post, avoid: list[str], shape_nudge: st
             "structure, at most one claim, one or two short sentences, never the "
             "'shows up before symptoms/diagnosis/a scan' construction, and never 'tends to'/'seems to'."
         )
-        retry = _generate_once(client, post, block, nudge=nudge)
+        retry = _generate_once(client, post, block, nudge=nudge, voice_ex_block=voice_ex_block)
         if retry and len(_draft_problems(retry, avoid)) < len(problems):
             text = retry
     return text
 
 
-def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None) -> list[str]:
+def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,
+                    voice_examples: list[str] | None = None) -> list[str]:
     """Generate `count` DIVERSE candidates. The 2nd deliberately takes a different shape
     and angle from the 1st (and avoids it), so the reviewer gets genuinely different
-    options rather than two near-identical drafts. Each is self-corrected once."""
+    options rather than two near-identical drafts. Each is self-corrected once.
+    `voice_examples` are comments the team approved for this client — the learning loop's
+    anchor for how she really sounds."""
     base_avoid = list(avoid_texts or [])
+    voice_ex_block = _voice_examples_block(voice_examples)
     out: list[str] = []
     for i in range(max(1, count)):
         if not out:
-            text = _one_candidate(client, post, base_avoid, shape_nudge="")
+            text = _one_candidate(client, post, base_avoid, shape_nudge="", voice_ex_block=voice_ex_block)
         else:
             # Candidate 2+: force a different shape/angle from the ones already produced.
             shape_nudge = (
@@ -259,7 +281,7 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
                 "stated a view, react to a different specific detail instead) and a different opening. "
                 "The two options must feel distinct, not two phrasings of the same thought."
             )
-            text = _one_candidate(client, post, out + base_avoid, shape_nudge=shape_nudge)
+            text = _one_candidate(client, post, out + base_avoid, shape_nudge=shape_nudge, voice_ex_block=voice_ex_block)
         if text and text not in out:
             out.append(text)
     return out

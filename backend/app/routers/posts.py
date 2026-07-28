@@ -130,9 +130,19 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
         .order_by(Draft.created_at.desc())
         .limit(12).all()
     ]
+    # Learning loop: comments the team already approved/posted for this client are the
+    # gold standard for their real voice — feed them in so drafts sound less "AI" over
+    # time, with no manual example-seeding. (Final text = the human-edited version.)
+    approved = [
+        (d.edited_text or d.text) for d in db.query(Draft)
+        .join(Post, Post.id == Draft.post_id)
+        .filter(Post.client_id == post.client_id, Draft.status.in_(["approved", "posted"]))
+        .order_by(Draft.created_at.desc())
+        .limit(8).all()
+    ]
     # Two DIVERSE candidates so the reviewer picks the angle they like (acting on one
     # auto-discards the other — see update_draft).
-    texts = generate_drafts(post.client, post, count=2, avoid_texts=recent)
+    texts = generate_drafts(post.client, post, count=2, avoid_texts=recent, voice_examples=approved)
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
