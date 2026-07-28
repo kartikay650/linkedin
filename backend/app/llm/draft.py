@@ -220,25 +220,49 @@ def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str) -> 
     return drafts[0] if drafts else ""
 
 
-def generate_drafts(client: Client, post: Post, count: int = 1, avoid_texts: list[str] | None = None) -> list[str]:
-    """Generate one reply, then self-correct once if it trips the quality gate (the
-    over-used template, too long, reused opening, slop). Bounded to one retry."""
-    avoid_block = _avoid_block(avoid_texts)
-    text = _generate_once(client, post, avoid_block, nudge="")
+def _one_candidate(client: Client, post: Post, avoid: list[str], shape_nudge: str) -> str:
+    """One reply + a single self-correction pass if it trips the quality gate."""
+    block = _avoid_block(avoid)
+    text = _generate_once(client, post, block, nudge=shape_nudge)
     if not text:
-        return []
-    problems = _draft_problems(text, avoid_texts)
+        return ""
+    problems = _draft_problems(text, avoid)
     if problems:
         nudge = (
+            (shape_nudge + " ") if shape_nudge else ""
+        ) + (
             "Your previous attempt failed for these reasons: " + "; ".join(problems) + ". "
             "Write a COMPLETELY different comment that fixes them — different opening word, different "
-            "structure, at most one claim, one or two short sentences, and never the "
-            "'shows up before symptoms/diagnosis/a scan' construction."
+            "structure, at most one claim, one or two short sentences, never the "
+            "'shows up before symptoms/diagnosis/a scan' construction, and never 'tends to'/'seems to'."
         )
-        retry = _generate_once(client, post, avoid_block, nudge=nudge)
-        if retry and len(_draft_problems(retry, avoid_texts)) < len(problems):
+        retry = _generate_once(client, post, block, nudge=nudge)
+        if retry and len(_draft_problems(retry, avoid)) < len(problems):
             text = retry
-    return [text]
+    return text
+
+
+def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None) -> list[str]:
+    """Generate `count` DIVERSE candidates. The 2nd deliberately takes a different shape
+    and angle from the 1st (and avoids it), so the reviewer gets genuinely different
+    options rather than two near-identical drafts. Each is self-corrected once."""
+    base_avoid = list(avoid_texts or [])
+    out: list[str] = []
+    for i in range(max(1, count)):
+        if not out:
+            text = _one_candidate(client, post, base_avoid, shape_nudge="")
+        else:
+            # Candidate 2+: force a different shape/angle from the ones already produced.
+            shape_nudge = (
+                "IMPORTANT: make this a DIFFERENT KIND of comment from the option(s) already written "
+                "below — a different shape (if that one was an observation, ask a genuine question; if it "
+                "stated a view, react to a different specific detail instead) and a different opening. "
+                "The two options must feel distinct, not two phrasings of the same thought."
+            )
+            text = _one_candidate(client, post, out + base_avoid, shape_nudge=shape_nudge)
+        if text and text not in out:
+            out.append(text)
+    return out
 
 
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:

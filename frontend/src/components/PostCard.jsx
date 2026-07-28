@@ -143,8 +143,8 @@ export default function PostCard({ post, onActioned }) {
     setDrafting(true);
     try {
       const drafts = await api.draftReply(post.id);
-      onActioned(); // stays in the Queue; the generated reply just appears on the card
-      maybeVerify(Array.isArray(drafts) ? drafts[0] : null);
+      onActioned(); // stays in the Queue; the generated options just appear on the card
+      (Array.isArray(drafts) ? drafts : []).forEach(maybeVerify); // auto-verify each option
     } catch (e) {
       toast(`Couldn't generate a reply: ${e.message}. Try again in a moment.`);
     } finally {
@@ -272,7 +272,13 @@ export default function PostCard({ post, onActioned }) {
         </button>
       )}
 
-      {workingDrafts.map((draft) => (
+      {workingDrafts.length > 1 && (
+        <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-muted)" }}>
+          Two options, take a different angle each. Pick the one you like — approving, moving to draft, or marking one posted removes the other. Tweak or edit either first.
+        </div>
+      )}
+
+      {workingDrafts.map((draft, idx) => (
           <div
             key={draft.id}
             style={{
@@ -284,6 +290,11 @@ export default function PostCard({ post, onActioned }) {
               marginTop: 10,
             }}
           >
+            {workingDrafts.length > 1 && (
+              <div style={{ fontSize: 12, fontWeight: 700, color: STAGES[draftStage(draft)].color, marginBottom: 8 }}>
+                Option {idx + 1}
+              </div>
+            )}
             <textarea
               rows={3}
               style={{

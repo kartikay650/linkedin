@@ -130,7 +130,9 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
         .order_by(Draft.created_at.desc())
         .limit(12).all()
     ]
-    texts = generate_drafts(post.client, post, count=1, avoid_texts=recent)
+    # Two DIVERSE candidates so the reviewer picks the angle they like (acting on one
+    # auto-discards the other — see update_draft).
+    texts = generate_drafts(post.client, post, count=2, avoid_texts=recent)
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
@@ -140,12 +142,17 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
             db.delete(d)
     db.flush()
 
-    provenance = annotate_provenance(post.client, post, texts[0], _docs_text(db, post.client_id))
-    draft = Draft(post_id=post.id, variant_index=0, text=texts[0], provenance=provenance)
-    db.add(draft)
+    docs_text = _docs_text(db, post.client_id)
+    created = []
+    for i, text in enumerate(texts):
+        provenance = annotate_provenance(post.client, post, text, docs_text)
+        draft = Draft(post_id=post.id, variant_index=i, text=text, provenance=provenance)
+        db.add(draft)
+        created.append(draft)
     db.commit()
-    db.refresh(draft)
-    return [draft]
+    for d in created:
+        db.refresh(d)
+    return created
 
 
 @router.post("/drafts/{draft_id}/refine", response_model=DraftOut)
@@ -209,6 +216,13 @@ def update_draft(draft_id: int, payload: DraftUpdate, db: Session = Depends(get_
         draft.edited_text = payload.edited_text
     if payload.status is not None:
         draft.status = payload.status
+        # Picking a candidate (move to draft / approve / mark posted) discards the other
+        # un-picked options on the same post so a post never carries a leftover candidate.
+        if payload.status in ("drafted", "approved", "posted"):
+            for sib in db.query(Draft).filter(
+                Draft.post_id == draft.post_id, Draft.id != draft.id, Draft.status == "pending"
+            ).all():
+                db.delete(sib)
 
     db.commit()
     return {"ok": True}
