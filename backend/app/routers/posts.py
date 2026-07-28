@@ -216,6 +216,17 @@ def verify_claims_route(draft_id: int, db: Session = Depends(get_db)):
     return draft
 
 
+@router.delete("/drafts/{draft_id}")
+def delete_draft(draft_id: int, db: Session = Depends(get_db)):
+    """Remove one draft option (used to discard the option you don't want, leaving the
+    other for the next person in the drafter -> approver -> poster handoff)."""
+    draft = db.get(Draft, draft_id)
+    if draft:
+        db.delete(draft)
+        db.commit()
+    return {"ok": True}
+
+
 @router.patch("/drafts/{draft_id}", response_model=None)
 def update_draft(draft_id: int, payload: DraftUpdate, db: Session = Depends(get_db)):
     draft = db.get(Draft, draft_id)

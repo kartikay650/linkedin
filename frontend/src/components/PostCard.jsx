@@ -105,6 +105,17 @@ export default function PostCard({ post, onActioned }) {
     }
   };
 
+  // Drop one option, keep the other — lets the drafter narrow 2 -> 1 before handing off
+  // to whoever approves/posts, without having to approve it themselves.
+  const handleRemoveOption = async (draft) => {
+    try {
+      await api.deleteDraft(draft.id);
+      onActioned();
+    } catch (e) {
+      toast(`Couldn't remove that option: ${e.message}. Try again.`);
+    }
+  };
+
   const handleDismiss = async () => {
     setDismissing(true);
     try {
@@ -442,8 +453,27 @@ export default function PostCard({ post, onActioned }) {
               >
                 {noteOpen[draft.id] ? "Close feedback" : "Give feedback"}
               </button>
+              {workingDrafts.length > 1 && (
+                <button
+                  onClick={() => handleRemoveOption(draft)}
+                  title="Discard just this option and keep the other one for review"
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border)",
+                    background: "var(--surface)",
+                    color: "var(--text-muted)",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    marginLeft: "auto",
+                  }}
+                >
+                  Remove this option
+                </button>
+              )}
               <button
                 onClick={() => handleStatus(draft, "rejected")}
+                title="Reject the reply for this post entirely"
                 style={{
                   padding: "6px 12px",
                   borderRadius: 6,
@@ -452,7 +482,7 @@ export default function PostCard({ post, onActioned }) {
                   color: "var(--danger)",
                   fontSize: 13,
                   fontWeight: 500,
-                  marginLeft: "auto",
+                  marginLeft: workingDrafts.length > 1 ? "8px" : "auto",
                 }}
               >
                 Reject

@@ -56,6 +56,7 @@ export const api = {
   listPosts: (clientId, view = "active") => request(`/clients/${clientId}/posts?view=${encodeURIComponent(view)}`),
   updateDraft: (draftId, payload) =>
     request(`/drafts/${draftId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteDraft: (draftId) => request(`/drafts/${draftId}`, { method: "DELETE" }),
   draftReply: (postId) => request(`/posts/${postId}/draft`, { method: "POST" }),
   refineDraft: (draftId, instruction) =>
     request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify({ instruction }) }),
