@@ -33,6 +33,7 @@ export default function PostCard({ post, onActioned }) {
   const [noteOpen, setNoteOpen] = useState({});
   const [noteText, setNoteText] = useState({});
   const [savingNote, setSavingNote] = useState(null);
+  const [savedId, setSavedId] = useState(null);
 
   // Drafts still being worked: generated (pending), moved to draft, or approved — not posted/rejected.
   const workingDrafts = post.drafts.filter((d) => ["pending", "drafted", "approved"].includes(d.status));
@@ -66,7 +67,7 @@ export default function PostCard({ post, onActioned }) {
   };
 
   const handleCopy = async (draft) => {
-    await navigator.clipboard.writeText(editedText[draft.id] ?? draft.text);
+    await navigator.clipboard.writeText(editedText[draft.id] ?? draft.edited_text ?? draft.text);
     setCopiedId(draft.id);
     setTimeout(() => setCopiedId(null), 1500);
   };
@@ -84,6 +85,22 @@ export default function PostCard({ post, onActioned }) {
       onActioned();
     } catch (e) {
       toast(`Couldn't save that: ${e.message}. Try again.`);
+    }
+  };
+
+  // Persist a manual edit to the comment WITHOUT changing its status. Before this,
+  // edits only stuck as a side effect of Move-to-draft/Approve/Mark-posted, so an
+  // edit made and left on its own was lost on the next reload (and the box always
+  // showed the generated text because it ignored the saved edited_text).
+  const handleSaveEdit = async (draft) => {
+    const text = editedText[draft.id] ?? draft.edited_text ?? draft.text;
+    try {
+      await api.updateDraft(draft.id, { edited_text: text });
+      setSavedId(draft.id);
+      setTimeout(() => setSavedId((cur) => (cur === draft.id ? null : cur)), 1600);
+      onActioned();
+    } catch (e) {
+      toast(`Couldn't save your edit: ${e.message}. Try again.`);
     }
   };
 
@@ -289,7 +306,13 @@ export default function PostCard({ post, onActioned }) {
         </div>
       )}
 
-      {workingDrafts.map((draft, idx) => (
+      {workingDrafts.map((draft, idx) => {
+          // What the box shows: an in-progress edit, else the saved edit, else the
+          // generated text. "dirty" = the box differs from what's persisted.
+          const shown = editedText[draft.id] ?? draft.edited_text ?? draft.text;
+          const dirty = shown !== (draft.edited_text ?? draft.text);
+          const edited = !!(draft.edited_text && draft.edited_text !== draft.text);
+          return (
           <div
             key={draft.id}
             style={{
@@ -318,10 +341,17 @@ export default function PostCard({ post, onActioned }) {
                 lineHeight: 1.5,
                 opacity: refining === draft.id ? 0.6 : 1,
               }}
-              value={editedText[draft.id] ?? draft.text}
+              value={shown}
               disabled={refining === draft.id}
               onChange={(e) => setEditedText((prev) => ({ ...prev, [draft.id]: e.target.value }))}
             />
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+              {dirty
+                ? "Unsaved changes — click Save edit to keep them."
+                : edited
+                ? "Edited and saved."
+                : "You can edit this text directly, then Save edit."}
+            </div>
 
             {/* Tweak row: quick chips + free-text instruction */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
@@ -362,6 +392,23 @@ export default function PostCard({ post, onActioned }) {
             <ProvenancePanel segments={provByDraft[draft.id] ?? draft.provenance} verifying={verifying === draft.id} />
 
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button
+                onClick={() => handleSaveEdit(draft)}
+                disabled={!dirty && savedId !== draft.id}
+                title="Save your edits to this comment (keeps its current status)"
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: savedId === draft.id ? "var(--success)" : dirty ? "var(--success)" : "#e5e7eb",
+                  color: savedId === draft.id || dirty ? "#fff" : "var(--text-muted)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: dirty ? "pointer" : "default",
+                }}
+              >
+                {savedId === draft.id ? "Saved ✓" : "Save edit"}
+              </button>
               <button
                 onClick={() => handleCopy(draft)}
                 style={{
@@ -514,7 +561,8 @@ export default function PostCard({ post, onActioned }) {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
     </div>
   );
 }
