@@ -257,7 +257,7 @@ export default function Dashboard() {
         ) : posts.length === 0 ? (
           <EmptyState
             title="No fresh posts"
-            subtitle="Nothing from the last 5 days yet. Hit Sync now to pull the latest, or check back after the morning sync."
+            subtitle="Nothing from the last 14 days yet. Hit Sync all to pull the latest, or check back after the morning sync."
           />
         ) : (
           posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => loadPosts(true)} />)

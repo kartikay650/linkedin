@@ -32,7 +32,7 @@ _GLOBAL_POSTS = 1
 # is the spend control — infrequent posters aren't re-scraped on every sync. Tracked
 # per PROFILE (Creator.last_fetched_at), so a profile shared by N clients is scraped
 # once per its window and fanned out to all of them, never N times. Tune here.
-_FETCH_CADENCE_DAYS = {"yes": 2, "sometimes": 7, "no": 30}
+_FETCH_CADENCE_DAYS = {"yes": 2, "sometimes": 3, "no": 30}
 _DEFAULT_CADENCE_DAYS = 7
 # Watch-creators are hand-picked/high-priority, so fetched more often than the shared
 # list, but still capped so a same-day re-sync doesn't re-scrape them.
@@ -151,7 +151,7 @@ def fire_profiles(db: Session, profiles: list[dict], time_budget_s: float = _FIR
     return attempted, []
 
 
-def backfill_client_creator(db: Session, client: Client, source_ref: str, max_age_days: int = 5) -> int:
+def backfill_client_creator(db: Session, client: Client, source_ref: str, max_age_days: int = 14) -> int:
     """Give `client` the recent posts we ALREADY have for this profile URL (scraped for
     other clients), so a newly-assigned client isn't empty and we don't re-scrape. No
     Apify cost — reuses stored posts; scores relevance for this client. Returns # added."""

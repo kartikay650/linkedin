@@ -30,7 +30,7 @@ def _docs_text(db: Session, client_id: int) -> str:
 def list_posts_for_client(
     client_id: int,
     view: str = Query("active", description="active | needs_review | approved | posted | all"),
-    max_age_days: int = Query(5, description="only show posts newer than this many days"),
+    max_age_days: int = Query(14, description="only show posts newer than this many days"),
     db: Session = Depends(get_db),
 ):
     query = (

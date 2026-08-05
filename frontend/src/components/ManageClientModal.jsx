@@ -293,7 +293,7 @@ function FeedbackSection({ client }) {
   );
 }
 
-const _FREQ_LABEL = { yes: "Weekly+", sometimes: "Monthly", no: "Rarely" };
+const _FREQ_LABEL = { yes: "Every 2 days", sometimes: "Every 3 days", no: "Monthly" };
 
 function TrackedProfilesSection({ client }) {
   const [creators, setCreators] = useState([]);
@@ -417,9 +417,9 @@ function TrackedProfilesSection({ client }) {
           title="How often to check this profile for new posts"
           style={{ ...inputStyle, flex: "0 0 auto" }}
         >
-          <option value="yes">Weekly+</option>
-          <option value="sometimes">Monthly</option>
-          <option value="no">Rarely</option>
+          <option value="yes">Every 2 days</option>
+          <option value="sometimes">Every 3 days</option>
+          <option value="no">Monthly</option>
         </select>
         <button type="submit" disabled={adding} style={{ ...smallButtonStyle, background: "var(--primary)", color: "#fff", border: "none" }}>
           {adding ? "Adding…" : "Add"}

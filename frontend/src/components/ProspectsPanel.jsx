@@ -138,9 +138,9 @@ export default function ProspectsPanel() {
                 title="How often they post — controls how often we re-fetch them (fewer fetches = lower cost)"
                 style={{ ...pillBtn, padding: "6px 8px", cursor: "pointer" }}
               >
-                <option value="yes">Weekly+</option>
-                <option value="sometimes">Monthly</option>
-                <option value="no">Rarely</option>
+                <option value="yes">Every 2 days</option>
+                <option value="sometimes">Every 3 days</option>
+                <option value="no">Monthly</option>
               </select>
             )}
             {assignable && (
