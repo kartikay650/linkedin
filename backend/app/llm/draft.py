@@ -196,13 +196,97 @@ def _opener(text: str) -> str:
     return " ".join(re.findall(r"[a-z']+", (text or "").lower())[:3])
 
 
-def _draft_problems(text: str, avoid_texts: list[str] | None) -> list[str]:
+def _first_word(text: str) -> str:
+    w = re.findall(r"[a-z']+", (text or "").lower())
+    return w[0] if w else ""
+
+
+# A comment "asks the author something" — a literal '?' OR the soft-question forms
+# ("Curious what...", "I wonder if...") that read as statements but function as questions.
+_SOFT_Q_RE = re.compile(r"\bcurious\b|\bwonder(ing)?\b|\bi'?d love to (know|hear)\b", re.I)
+
+
+def _is_question(text: str) -> bool:
+    t = (text or "").strip()
+    return t.endswith("?") or bool(_SOFT_Q_RE.search(t))
+
+
+def output_profile(texts: list[str] | None) -> dict | None:
+    """The tool's recent OUTPUT signature, so a new draft can steer away from whatever shape
+    it has been OVER-using lately — adaptive anti-repetition, not a fixed ban list. Computed
+    over recent comments for this client PLUS a global sample across all clients (so a tic
+    that spreads across clients, like the 'Curious ...?' question, is caught). Returns None
+    when there's too little history to judge."""
+    from collections import Counter
+    seen: list[str] = []
+    for t in (texts or []):
+        t = (t or "").strip()
+        if t and t not in seen:
+            seen.append(t)
+    n = len(seen)
+    if n < 5:
+        return None
+    openers = Counter(w for w in (_first_word(t) for t in seen) if w)
+    q = sum(1 for t in seen if _is_question(t))
+    cur = sum(1 for t in seen if "curious" in t.lower())
+    threshold = max(2, round(n * 0.15))  # an opener used in >=15% of recent comments is over-used
+    overused = sorted(w for w, c in openers.items() if c >= threshold)
+    return {"n": n, "q_rate": q / n, "curious_rate": cur / n, "overused_openers": overused}
+
+
+def _self_awareness_block(profile: dict | None) -> str:
+    """Feed the tool its own recent pattern stats and tell it to break them — the 'it knows
+    what it has already said' loop. Adaptive: it targets whatever is currently over-used, so
+    no new hardcoded phrase ban is needed as tics shift over time."""
+    if not profile:
+        return ""
+    rules = []
+    if profile["curious_rate"] >= 0.06:
+        rules.append("- Do NOT use the word 'Curious', and do not open by saying you are curious.")
+    if profile["q_rate"] >= 0.25:
+        rules.append("- Do NOT ask the author a question this time. Make a plain statement or observation.")
+    if profile["overused_openers"]:
+        rules.append("- Do NOT open with any of these over-used words: "
+                     + ", ".join(f"'{w}'" for w in profile["overused_openers"]) + ".")
+    if not rules:
+        return ""
+    header = (
+        f"SELF-CHECK — across your last {profile['n']} comments (this client + others), "
+        f"{round(100*profile['q_rate'])}% asked the author a question and "
+        f"{round(100*profile['curious_rate'])}% used the word 'Curious'. You are repeating yourself. "
+        "Break the pattern this time:"
+    )
+    return "=== BREAK YOUR OWN PATTERN ===\n" + header + "\n" + "\n".join(rules) + "\n=== END ==="
+
+
+# Comment shapes the drafter rotates through so no single shape (e.g. the question) dominates.
+_SHAPE_NUDGES = {
+    "observation": "Shape for this one: a specific observation about ONE detail in the post, stated plainly. A statement, not a question.",
+    "reaction": "Shape for this one: a short, blunt human reaction to one specific thing. One sentence is ideal. A statement, not a question.",
+    "affirmation": "Shape for this one: plainly affirm or build on the core idea in her own words. A statement, not a question.",
+    "technical": "Shape for this one: one specific, grounded point about the substance, stated plainly. A statement, not a question.",
+    "question": "Shape for this one: ask ONE genuine, specific question the author would enjoy answering. Do NOT start it with 'Curious' or 'Wondering' — open with the real question word.",
+}
+_SHAPE_ORDER = ["observation", "reaction", "technical", "affirmation", "question"]
+
+
+def _draft_problems(text: str, avoid_texts: list[str] | None, profile: dict | None = None) -> list[str]:
     """Deterministic quality gate: house-style violations (incl. the over-used template,
-    length, negation, slop) plus reusing a recent comment's opening."""
+    length, negation, slop), reusing a recent comment's opening, and — adaptively — matching
+    whatever pattern the tool is currently over-using (per `profile`)."""
     problems = list(check_violations(text))
     op = _opener(text)
     if op and any(op == _opener(t) for t in (avoid_texts or [])):
         problems.append("same opening as a recent comment")
+    if profile:
+        fw = _first_word(text)
+        low = (text or "").lower()
+        if fw and fw in profile["overused_openers"]:
+            problems.append(f"opens with the over-used word '{fw}'")
+        if profile["curious_rate"] >= 0.06 and "curious" in low:
+            problems.append("uses 'Curious', which is over-used right now")
+        if profile["q_rate"] >= 0.25 and _is_question(text):
+            problems.append("is a question, and questions are over-used right now")
     return problems
 
 
@@ -240,50 +324,70 @@ def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str, voi
     return drafts[0] if drafts else ""
 
 
-def _one_candidate(client: Client, post: Post, avoid: list[str], shape_nudge: str, voice_ex_block: str) -> str:
+def _one_candidate(client: Client, post: Post, avoid: list[str], shape_nudge: str, voice_ex_block: str,
+                   aware_block: str = "", profile: dict | None = None) -> str:
     """One reply + a single self-correction pass if it trips the quality gate."""
-    block = _avoid_block(avoid)
-    text = _generate_once(client, post, block, nudge=shape_nudge, voice_ex_block=voice_ex_block)
-    if not text:
+    block = "\n\n".join(b for b in (aware_block, _avoid_block(avoid)) if b)
+    best = _generate_once(client, post, block, nudge=shape_nudge, voice_ex_block=voice_ex_block)
+    if not best:
         return ""
-    problems = _draft_problems(text, avoid)
-    if problems:
+    # Loop-until-clean (max 2 retries): when we suppress one crutch (questions/'Curious')
+    # the model tends to fall back to ANOTHER (the 'X before a scan/symptoms' template), so a
+    # single retry often isn't enough. Keep the version with the fewest problems; stop as soon
+    # as one is clean. Retries only fire when a draft is still flawed, so clean drafts cost nothing.
+    best_problems = _draft_problems(best, avoid, profile)
+    tries = 0
+    while best_problems and tries < 2:
+        tries += 1
         nudge = (
             (shape_nudge + " ") if shape_nudge else ""
         ) + (
-            "Your previous attempt failed for these reasons: " + "; ".join(problems) + ". "
-            "Write a COMPLETELY different comment that fixes them — different opening word, different "
-            "structure, at most one claim, one or two short sentences, never the "
-            "'shows up before symptoms/diagnosis/a scan' construction, and never 'tends to'/'seems to'."
+            "Your previous attempt failed for these reasons: " + "; ".join(best_problems) + ". "
+            "Write a COMPLETELY different comment that fixes ALL of them — different opening word, "
+            "different structure, at most one claim, one or two short sentences (never three). Do NOT "
+            "use 'Curious', do NOT ask a question unless the shape above tells you to, never say "
+            "'tends to'/'seems to', and NEVER use the construction where something 'shows up' / 'starts' "
+            "/ 'loses capacity' / 'begins' BEFORE a scan, symptoms, a diagnosis, or bloodwork — that "
+            "template is banned."
         )
         retry = _generate_once(client, post, block, nudge=nudge, voice_ex_block=voice_ex_block)
-        if retry and len(_draft_problems(retry, avoid)) < len(problems):
-            text = retry
-    return text
+        if not retry:
+            break
+        rp = _draft_problems(retry, avoid, profile)
+        if len(rp) < len(best_problems):
+            best, best_problems = retry, rp
+    return best
 
 
 def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,
-                    voice_examples: list[str] | None = None) -> list[str]:
-    """Generate `count` DIVERSE candidates. The 2nd deliberately takes a different shape
-    and angle from the 1st (and avoids it), so the reviewer gets genuinely different
-    options rather than two near-identical drafts. Each is self-corrected once.
-    `voice_examples` are comments the team approved for this client — the learning loop's
-    anchor for how she really sounds."""
+                    voice_examples: list[str] | None = None, global_texts: list[str] | None = None) -> list[str]:
+    """Generate `count` DIVERSE candidates. Anti-repetition is now SELF-AWARE: from the tool's
+    own recent output (this client's recent comments in `avoid_texts` + a global cross-client
+    sample in `global_texts`) we build an `output_profile` and (1) inject a "break your own
+    pattern" block telling the model to avoid whatever it is currently over-using (the 'Curious
+    ...?' question tic today), (2) rotate each candidate through a DIFFERENT comment shape,
+    dropping the question shape entirely when questions are already over-used, and (3) fail a
+    draft in the self-correction gate if it matches the over-used pattern. `voice_examples` are
+    comments the team approved for this client — the learning-loop voice anchor."""
     base_avoid = list(avoid_texts or [])
+    profile = output_profile(base_avoid + list(global_texts or []))
     voice_ex_block = _voice_examples_block(voice_examples)
+    aware_block = _self_awareness_block(profile)
+    # Which shapes are allowed this round — drop the question when it's already over-used, so
+    # questions become an occasional shape rather than the default.
+    drop_q = bool(profile and (profile["q_rate"] >= 0.25 or profile["curious_rate"] >= 0.06))
+    shapes = [s for s in _SHAPE_ORDER if not (s == "question" and drop_q)]
+    # Rotate deterministically by post id so shapes vary across posts without randomness.
+    start = (getattr(post, "id", 0) or 0) % len(shapes)
     out: list[str] = []
     for i in range(max(1, count)):
-        if not out:
-            text = _one_candidate(client, post, base_avoid, shape_nudge="", voice_ex_block=voice_ex_block)
-        else:
-            # Candidate 2+: force a different shape/angle from the ones already produced.
-            shape_nudge = (
-                "IMPORTANT: make this a DIFFERENT KIND of comment from the option(s) already written "
-                "below — a different shape (if that one was an observation, ask a genuine question; if it "
-                "stated a view, react to a different specific detail instead) and a different opening. "
-                "The two options must feel distinct, not two phrasings of the same thought."
-            )
-            text = _one_candidate(client, post, out + base_avoid, shape_nudge=shape_nudge, voice_ex_block=voice_ex_block)
+        shape = shapes[(start + i) % len(shapes)]
+        shape_nudge = _SHAPE_NUDGES[shape]
+        if out:
+            shape_nudge += (" Make it clearly different from the option(s) already written below — a "
+                            "different opening word and a different angle, not a rephrasing.")
+        text = _one_candidate(client, post, out + base_avoid, shape_nudge=shape_nudge,
+                              voice_ex_block=voice_ex_block, aware_block=aware_block, profile=profile)
         if text and text not in out:
             out.append(text)
     return out

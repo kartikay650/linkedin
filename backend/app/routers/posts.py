@@ -128,7 +128,16 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
         .join(Post, Post.id == Draft.post_id)
         .filter(Post.client_id == post.client_id, Draft.post_id != post.id)
         .order_by(Draft.created_at.desc())
-        .limit(12).all()
+        .limit(20).all()
+    ]
+    # A GLOBAL sample of the tool's recent output across ALL clients — so `output_profile`
+    # can catch a pattern that spreads across clients (e.g. the "Curious ...?" question tic),
+    # which a per-client-only view misses. See generate_drafts' self-aware anti-repetition.
+    global_recent = [
+        r[0] for r in db.query(Draft.text)
+        .filter(Draft.post_id != post.id)
+        .order_by(Draft.created_at.desc())
+        .limit(40).all()
     ]
     # Learning loop: comments the team already approved/posted for this client are the
     # gold standard for their real voice — feed them in so drafts sound less "AI" over
@@ -142,7 +151,8 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     ]
     # Two DIVERSE candidates so the reviewer picks the angle they like (acting on one
     # auto-discards the other — see update_draft).
-    texts = generate_drafts(post.client, post, count=2, avoid_texts=recent, voice_examples=approved)
+    texts = generate_drafts(post.client, post, count=2, avoid_texts=recent, voice_examples=approved,
+                            global_texts=global_recent)
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
