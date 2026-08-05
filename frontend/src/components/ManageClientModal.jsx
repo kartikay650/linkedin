@@ -12,7 +12,7 @@ export default function ManageClientModal({ open, onClose, client, onUpdated, on
   return (
     <Modal open={open} onClose={onClose} title={`Manage ${client.name}`} width={640}>
       <ClientDetailsSection client={client} onUpdated={onUpdated} />
-      <WatchCreatorsSection client={client} />
+      <TrackedProfilesSection client={client} />
       <ProspectsSection client={client} />
       <ToneDocumentsSection client={client} onUpdated={onUpdated} />
       <BrandProfileSection client={client} onUpdated={onUpdated} />
@@ -293,14 +293,21 @@ function FeedbackSection({ client }) {
   );
 }
 
-function WatchCreatorsSection({ client }) {
+const _FREQ_LABEL = { yes: "Weekly+", sometimes: "Monthly", no: "Rarely" };
+
+function TrackedProfilesSection({ client }) {
   const [creators, setCreators] = useState([]);
   const [profileUrl, setProfileUrl] = useState("");
   const [label, setLabel] = useState("");
+  const [freq, setFreq] = useState("yes");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState(null);
+  const [note, setNote] = useState(null);
 
-  const load = () => api.listWatchCreators(client.id).then(setCreators);
+  // The client's REAL tracked creators — the same master list (creator_clients) the
+  // Creators & prospects panel uses, filtered to this client. Adding here creates/reuses
+  // a creator and assigns it, so it's tracked (and frequency-synced) immediately.
+  const load = () => api.listClientCreators(client.id).then(setCreators);
 
   useEffect(() => {
     load();
@@ -312,10 +319,23 @@ function WatchCreatorsSection({ client }) {
     if (!profileUrl.trim()) return;
     setAdding(true);
     setError(null);
+    setNote(null);
     try {
-      await api.addWatchCreator(client.id, { profile_url: profileUrl.trim(), label: label.trim() });
+      const creator = await api.addCreator({
+        profile_url: profileUrl.trim(),
+        name: label.trim(),
+        kind: "creator",
+        post_frequency: freq,
+      });
+      const res = await api.assignCreatorClient(creator.id, client.id);
       setProfileUrl("");
       setLabel("");
+      const back = res?.backfilled || 0;
+      setNote(
+        back > 0
+          ? `Now tracking ${creator.name || "this profile"}. Pulled in ${back} recent post${back > 1 ? "s" : ""} we already had.`
+          : `Now tracking ${creator.name || "this profile"} for ${client.name}. New posts arrive on the next sync.`
+      );
       load();
     } catch (err) {
       setError(err.message);
@@ -324,14 +344,20 @@ function WatchCreatorsSection({ client }) {
     }
   };
 
+  // Remove = unassign from THIS client only (the creator stays in the master list for any
+  // other clients tracking it). Never deletes the shared creator.
   const handleRemove = async (creatorId) => {
-    await api.removeWatchCreator(client.id, creatorId);
+    await api.unassignCreatorClient(creatorId, client.id);
     load();
   };
 
   return (
     <section style={sectionStyle}>
       <div style={sectionTitleStyle}>Tracked profiles</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
+        The creators whose posts are pulled into {client.name}'s feed — the same master list as
+        Creators &amp; prospects, shown just for this client. Add one here and it's tracked right away.
+      </div>
       {creators.length === 0 && (
         <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 10 }}>
           No profiles tracked yet for this client.
@@ -351,7 +377,7 @@ function WatchCreatorsSection({ client }) {
           }}
         >
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{c.label || "(no label)"}</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name || "(no name)"}</div>
             <a
               href={c.profile_url}
               target="_blank"
@@ -361,29 +387,45 @@ function WatchCreatorsSection({ client }) {
               {c.profile_url}
             </a>
           </div>
-          <button onClick={() => handleRemove(c.id)} style={{ ...smallButtonStyle, color: "var(--danger)", flexShrink: 0 }}>
-            Remove
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+              {_FREQ_LABEL[c.post_frequency] || "Monthly"}
+            </span>
+            <button onClick={() => handleRemove(c.id)} style={{ ...smallButtonStyle, color: "var(--danger)" }}>
+              Remove
+            </button>
+          </div>
         </div>
       ))}
 
-      <form onSubmit={handleAdd} style={{ display: "flex", gap: 6, marginTop: 10 }}>
+      <form onSubmit={handleAdd} style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
         <input
           placeholder="LinkedIn profile URL"
           value={profileUrl}
           onChange={(e) => setProfileUrl(e.target.value)}
-          style={{ ...inputStyle, flex: 2 }}
+          style={{ ...inputStyle, flex: 2, minWidth: 180 }}
         />
         <input
-          placeholder="Label"
+          placeholder="Name"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          style={{ ...inputStyle, flex: 1 }}
+          style={{ ...inputStyle, flex: 1, minWidth: 100 }}
         />
+        <select
+          value={freq}
+          onChange={(e) => setFreq(e.target.value)}
+          title="How often to check this profile for new posts"
+          style={{ ...inputStyle, flex: "0 0 auto" }}
+        >
+          <option value="yes">Weekly+</option>
+          <option value="sometimes">Monthly</option>
+          <option value="no">Rarely</option>
+        </select>
         <button type="submit" disabled={adding} style={{ ...smallButtonStyle, background: "var(--primary)", color: "#fff", border: "none" }}>
-          Add
+          {adding ? "Adding…" : "Add"}
         </button>
       </form>
+      {note && <div style={{ fontSize: 12, color: "var(--success)", marginTop: 6 }}>{note}</div>}
       {error && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>{error}</div>}
     </section>
   );

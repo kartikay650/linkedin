@@ -3,7 +3,7 @@ import tempfile
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.db import get_db
@@ -15,11 +15,12 @@ from app.llm.brand_profile import extract_brand_profile
 from app.llm.tone_synthesis import synthesize_tone_profile
 from app.scraper.linkedin_lookup import resolve_creator_url, resolve_creators
 from app.models import (
-    Client, ClientDocument, ClientFeedback, DocumentStatus, DocumentSource, Prospect, ProspectStatus, WatchCreator
+    Client, ClientDocument, ClientFeedback, Creator, CreatorClient, DocumentStatus, DocumentSource,
+    Prospect, ProspectStatus, WatchCreator
 )
 from app.schemas import (
     BrandProfileOut, ClientCreate, ClientDocumentOut, ClientFeedbackCreate, ClientFeedbackOut, ClientOut,
-    ClientUpdate, ExtractBrandRequest, ProspectOut, ResolveCreatorRequest, ToneSynthesisOut,
+    ClientUpdate, CreatorOut, ExtractBrandRequest, ProspectOut, ResolveCreatorRequest, ToneSynthesisOut,
     TrackCreatorsRequest, WatchCreatorCreate, WatchCreatorOut, YoutubeDocumentCreate,
 )
 
@@ -143,6 +144,24 @@ def delete_client(client_id: int, db: Session = Depends(get_db)):
     db.delete(client)  # cascades to documents, watch-creators, posts, prospects
     db.commit()
     return {"ok": True}
+
+
+@router.get("/{client_id}/creators", response_model=list[CreatorOut])
+def list_client_creators(client_id: int, db: Session = Depends(get_db)):
+    """The tracked creators for this client — the SAME master list (creator_clients) the
+    Creators & prospects panel uses, filtered to this client. Powers the unified 'Tracked
+    profiles' section in Manage profile so it reflects what's really being tracked (not the
+    old separate watch_creators mini-list)."""
+    if not db.get(Client, client_id):
+        raise HTTPException(404, "client not found")
+    return (
+        db.query(Creator)
+        .join(CreatorClient, CreatorClient.creator_id == Creator.id)
+        .options(selectinload(Creator.client_links))
+        .filter(CreatorClient.client_id == client_id, Creator.kind == "creator")
+        .order_by(Creator.name)
+        .all()
+    )
 
 
 @router.get("/{client_id}/watch-creators", response_model=list[WatchCreatorOut])

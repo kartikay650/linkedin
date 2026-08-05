@@ -84,6 +84,7 @@ export const api = {
   deleteFeedback: (clientId, feedbackId) =>
     request(`/clients/${clientId}/feedback/${feedbackId}`, { method: "DELETE" }),
 
+  listClientCreators: (clientId) => request(`/clients/${clientId}/creators`),
   listWatchCreators: (clientId) => request(`/clients/${clientId}/watch-creators`),
   addWatchCreator: (clientId, payload) =>
     request(`/clients/${clientId}/watch-creators`, { method: "POST", body: JSON.stringify(payload) }),
