@@ -25,7 +25,9 @@ API_ROOT = "https://api.apify.com/v2"
 
 
 class ApifyError(Exception):
-    pass
+    def __init__(self, message: str = "", status: int = 0):
+        super().__init__(message)
+        self.status = status  # HTTP status of the failed call, when known (0 otherwise)
 
 
 def _build_input(profile_url: str, limit: int) -> dict:
@@ -68,11 +70,49 @@ def _tokens() -> list[str]:
     return toks
 
 
+# --- Account failover: skip an account that's out of monthly credit ----------
+# Apify free accounts have a hard monthly usage cap; once one is exhausted it REJECTS
+# new runs (HTTP 402), so trying it first on EVERY fetch burns a wasted call. We
+# remember a rejected account for a short cooldown and skip it, re-probing only
+# occasionally (and always after a process restart / month reset). In-process only,
+# which is safe on serverless: worst case is one wasted probe per cold instance, and
+# within a single batched-sync request every profile after the first skips it.
+_exhausted: dict[str, float] = {}
+_EXHAUSTED_COOLDOWN = 1800.0  # seconds to skip a maxed-out account before re-probing
+
+
+def _mark_exhausted(tok: str) -> None:
+    _exhausted[tok] = time.monotonic() + _EXHAUSTED_COOLDOWN
+
+
+def _looks_exhausted(status: int, body: str) -> bool:
+    """True only when a run-start failure means the account is out of monthly credit
+    (so we should skip it), NOT a transient error or a rate-limit — those must never
+    cause us to skip an otherwise-healthy account."""
+    if status == 402:
+        return True
+    b = (body or "").lower()
+    return any(k in b for k in (
+        "usage limit", "hard limit", "monthly usage", "usage credit",
+        "not enough usage", "quota exceeded", "payment required",
+    ))
+
+
+def _tokens_to_try() -> list[str]:
+    """Configured tokens minus any recently seen to be out of credit, order preserved.
+    Never empty: if all look exhausted (or the cooldown has lapsed) we return them all
+    so the accounts get re-probed (the month may have reset)."""
+    toks = _tokens()
+    now = time.monotonic()
+    live = [t for t in toks if _exhausted.get(t, 0.0) <= now]
+    return live or toks
+
+
 def run_actor(actor_id: str, payload: dict) -> list[dict]:
     """Start an actor, poll to completion, return dataset items. Tries each Apify
     account in turn — if one is out of monthly credit (or errors), it falls over to
     the next, so multiple free accounts behave as one larger balance."""
-    toks = _tokens()
+    toks = _tokens_to_try()
     if not toks:
         raise ApifyError("no Apify token configured")
     actor = actor_id.replace("/", "~")
@@ -81,6 +121,8 @@ def run_actor(actor_id: str, payload: dict) -> list[dict]:
         try:
             return _run_with_token(actor, payload, tok)
         except ApifyError as e:
+            if _looks_exhausted(getattr(e, "status", 0), str(e)):
+                _mark_exhausted(tok)  # out of credit — skip this account for a while
             last = e
     raise last or ApifyError("all Apify accounts failed")
 
@@ -89,7 +131,7 @@ def _run_with_token(actor: str, payload: dict, tok: str) -> list[dict]:
     token = {"token": tok}
     r = httpx.post(f"{API_ROOT}/acts/{actor}/runs", params=token, json=payload, timeout=60)
     if r.status_code >= 400:
-        raise ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:300]}")
+        raise ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:300]}", status=r.status_code)
     run = r.json()["data"]
     run_id = run["id"]
     deadline = settings.apify_timeout_seconds
@@ -121,7 +163,7 @@ def start_actor(actor_id: str, payload: dict, webhook: dict | None = None, timeo
     until one accepts the run (failover on exhausted credit). `timeout` bounds each
     POST — the batched sync passes a short one so a hung call fails fast to failover
     instead of eating the serverless time budget."""
-    toks = _tokens()
+    toks = _tokens_to_try()
     if not toks:
         raise ApifyError("no Apify token configured")
     actor = actor_id.replace("/", "~")
@@ -133,7 +175,9 @@ def start_actor(actor_id: str, payload: dict, webhook: dict | None = None, timeo
         try:
             r = httpx.post(f"{API_ROOT}/acts/{actor}/runs", params=params, json=payload, timeout=timeout)
             if r.status_code >= 400:
-                last = ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:300]}")
+                if _looks_exhausted(r.status_code, r.text):
+                    _mark_exhausted(tok)  # out of credit — skip this account for a while
+                last = ApifyError(f"couldn't start actor ({r.status_code}): {r.text[:300]}", status=r.status_code)
                 continue
             return r.json()["data"]["id"]
         except httpx.HTTPError as e:
