@@ -25,6 +25,7 @@ export default function Dashboard() {
   const [showManageClient, setShowManageClient] = useState(false);
   const [usage, setUsage] = useState([]);
   const [view, setView] = useState("active");
+  const [counts, setCounts] = useState(null);
 
   useEffect(() => {
     api.apifyUsage().then(setUsage).catch(() => {});
@@ -50,6 +51,9 @@ export default function Dashboard() {
       .listPosts(selectedClientId, view)
       .then(setPosts)
       .finally(() => { if (!silent) setLoading(false); });
+    // Per-tab counts for the badges — refreshed alongside the list so they stay in sync
+    // after any action (draft/approve/post/sync). View-independent, so fetched once here.
+    api.postCounts(selectedClientId).then(setCounts).catch(() => {});
   }, [selectedClientId, view]);
 
   useEffect(() => {
@@ -229,7 +233,10 @@ export default function Dashboard() {
                   key={key}
                   onClick={() => setView(key)}
                   style={{
-                    padding: "6px 14px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "6px 12px",
                     borderRadius: 999,
                     border: `1px solid ${selected ? meta.color : "transparent"}`,
                     background: selected ? meta.color : meta.bg,
@@ -240,6 +247,26 @@ export default function Dashboard() {
                   }}
                 >
                   {label}
+                  {counts && counts[key] != null && (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        minWidth: 18,
+                        height: 18,
+                        padding: "0 5px",
+                        borderRadius: 999,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        background: selected ? "#fff" : meta.color,
+                        color: selected ? meta.color : "#fff",
+                      }}
+                    >
+                      {counts[key]}
+                    </span>
+                  )}
                 </button>
               );
             })}

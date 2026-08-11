@@ -26,20 +26,18 @@ def _docs_text(db: Session, client_id: int) -> str:
     return "\n\n".join((d.extracted_text or "") for d in docs)
 
 
-@router.get("/clients/{client_id}/posts", response_model=list[PostWithDrafts])
-def list_posts_for_client(
-    client_id: int,
-    view: str = Query("active", description="active | needs_review | approved | posted | all"),
-    max_age_days: int = Query(14, description="only show posts newer than this many days"),
-    db: Session = Depends(get_db),
-):
-    query = (
+def _visible_posts(db: Session, client_id: int, max_age_days: int) -> list[Post]:
+    """The client's base feed BEFORE the per-tab filter: not dismissed, fresh enough (or
+    carrying in-progress work), with the client's own and same-company colleagues' posts
+    removed. Shared source of truth for both the post list and the per-tab counts, so the
+    tab badges can never disagree with what a tab actually shows."""
+    posts = (
         db.query(Post)
         .options(joinedload(Post.drafts))
         .filter(Post.client_id == client_id, Post.dismissed.is_(False))
         .order_by(Post.relevance_score.desc().nullslast(), Post.fetched_at.desc())
+        .all()
     )
-    posts = query.all()
 
     # Only surface fresh posts — engaging early is the whole point. Fall back to
     # fetch time when a post has no publish date (it was just scraped).
@@ -71,29 +69,56 @@ def list_posts_for_client(
                 p for p in posts
                 if (profile_slug(p.author_profile_url) or profile_slug(p.source_ref)) not in excluded
             ]
-
-    def has(post, status):
-        return any(d.status == status for d in post.drafts)
-
-    if view == "posted":
-        posts = [p for p in posts if has(p, "posted")]
-    elif view == "approved":
-        # Scientist-approved and waiting to be posted (not yet live).
-        posts = [p for p in posts if has(p, "approved") and not has(p, "posted")]
-    elif view == "draft":
-        # Explicitly moved to Draft for review (status "drafted"), not yet approved/posted.
-        # A freshly generated reply is "pending" and stays in the Queue — it only lands here
-        # when someone clicks "Move to draft".
-        posts = [p for p in posts if has(p, "drafted") and not has(p, "approved") and not has(p, "posted")]
-    elif view == "needs_review":
-        # Legacy alias: nothing approved or posted yet.
-        posts = [p for p in posts if not has(p, "approved") and not has(p, "posted")]
-    elif view == "all":
-        pass
-    else:  # "active" — the Queue: posts not moved to draft / approved / posted. A generated
-        # (pending) reply stays here so you can review or approve it without it disappearing.
-        posts = [p for p in posts if not has(p, "drafted") and not has(p, "approved") and not has(p, "posted")]
     return posts
+
+
+def _has(post, status) -> bool:
+    return any(d.status == status for d in post.drafts)
+
+
+def _in_view(post, view: str) -> bool:
+    """Whether a post belongs in a given tab. active/draft/approved/posted partition the
+    feed (each post lands in exactly one); "all" is everything; "needs_review" is a legacy alias."""
+    if view == "posted":
+        return _has(post, "posted")
+    if view == "approved":  # scientist-approved, waiting to be posted (not yet live)
+        return _has(post, "approved") and not _has(post, "posted")
+    if view == "draft":  # explicitly moved to Draft (status "drafted"), not yet approved/posted
+        return _has(post, "drafted") and not _has(post, "approved") and not _has(post, "posted")
+    if view == "needs_review":  # legacy alias
+        return not _has(post, "approved") and not _has(post, "posted")
+    if view == "all":
+        return True
+    # "active" — the Queue: not moved to draft/approved/posted (a generated "pending" reply stays here)
+    return not _has(post, "drafted") and not _has(post, "approved") and not _has(post, "posted")
+
+
+@router.get("/clients/{client_id}/posts", response_model=list[PostWithDrafts])
+def list_posts_for_client(
+    client_id: int,
+    view: str = Query("active", description="active | needs_review | approved | posted | all"),
+    max_age_days: int = Query(14, description="only show posts newer than this many days"),
+    db: Session = Depends(get_db),
+):
+    return [p for p in _visible_posts(db, client_id, max_age_days) if _in_view(p, view)]
+
+
+@router.get("/clients/{client_id}/post-counts")
+def post_counts(
+    client_id: int,
+    max_age_days: int = Query(14, description="same window as the post list"),
+    db: Session = Depends(get_db),
+):
+    """Per-tab counts for the badge on each tab (Queue/Draft/Approved/Posted/All). Computed
+    from the exact same visible set as the list, so the numbers always match the tabs."""
+    posts = _visible_posts(db, client_id, max_age_days)
+    return {
+        "active": sum(1 for p in posts if _in_view(p, "active")),
+        "draft": sum(1 for p in posts if _in_view(p, "draft")),
+        "approved": sum(1 for p in posts if _in_view(p, "approved")),
+        "posted": sum(1 for p in posts if _in_view(p, "posted")),
+        "all": len(posts),
+    }
 
 
 @router.post("/posts/{post_id}/dismiss")
