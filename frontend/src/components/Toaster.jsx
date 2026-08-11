@@ -18,16 +18,21 @@ export default function Toaster() {
   return (
     <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 2000, display: "flex", flexDirection: "column", gap: 8 }}>
       {items.map((t) => {
-        const err = t.type === "error";
+        const palette = {
+          error: { bg: "var(--danger-bg)", fg: "var(--danger)", border: "#fecaca" },
+          info: { bg: "#fef3c7", fg: "#b45309", border: "#fde68a" }, // amber — "needs attention"
+          success: { bg: "var(--success-bg)", fg: "var(--success)", border: "#bbf7d0" },
+        };
+        const p = palette[t.type] || palette.success;
         return (
           <div
             key={t.id}
             onClick={() => dismiss(t.id)}
             role="alert"
             style={{
-              background: err ? "var(--danger-bg)" : "var(--success-bg)",
-              color: err ? "var(--danger)" : "var(--success)",
-              border: `1px solid ${err ? "#fecaca" : "#bbf7d0"}`,
+              background: p.bg,
+              color: p.fg,
+              border: `1px solid ${p.border}`,
               borderRadius: 10,
               padding: "11px 14px",
               fontSize: 13,

@@ -121,6 +121,58 @@ def post_counts(
     }
 
 
+# Alert thresholds for the notification badge/pop-up. to_approve is set high because a large
+# review backlog is normal — a low number would fire constantly. Tune here.
+_NOTIFY_THRESHOLDS = {
+    "to_post": {"count": 10, "hours": 24},    # approved & waiting for the poster
+    "to_approve": {"count": 40, "hours": 48},  # drafted & waiting for the approver
+}
+
+
+@router.get("/notifications/summary")
+def notifications_summary(
+    max_age_days: int = Query(14, description="same window as the post list"),
+    db: Session = Depends(get_db),
+):
+    """Agency-wide 'what's waiting' for the notification badge + pop-up. Per stage
+    (to_post = approved-not-posted; to_approve = drafted-not-approved): the total across ALL
+    clients, the oldest waiting item's age, and a per-client breakdown so a click can jump
+    straight to the right client's tab. Same visible/in-view logic as the tabs, so the
+    numbers always match. Age uses the draft's created_at (best available proxy for how long
+    it's been sitting — there's no status-change timestamp)."""
+    now = datetime.now(timezone.utc)
+    # stage key -> (tab view for _in_view, the draft status whose age we measure)
+    STAGE = {"to_post": ("approved", "approved"), "to_approve": ("draft", "drafted")}
+
+    def oldest_hours(items, status):
+        oldest = None
+        for p in items:
+            for d in p.drafts:
+                if d.status == status and d.created_at:
+                    ts = d.created_at if d.created_at.tzinfo else d.created_at.replace(tzinfo=timezone.utc)
+                    if oldest is None or ts < oldest:
+                        oldest = ts
+        return round((now - oldest).total_seconds() / 3600, 1) if oldest else None
+
+    result = {k: {"total": 0, "oldest_hours": None, "by_client": []} for k in STAGE}
+    for client in db.query(Client).order_by(Client.name).all():
+        posts = _visible_posts(db, client.id, max_age_days)
+        for key, (view, status) in STAGE.items():
+            items = [p for p in posts if _in_view(p, view)]
+            if not items:
+                continue
+            oh = oldest_hours(items, status)
+            result[key]["total"] += len(items)
+            result[key]["by_client"].append(
+                {"id": client.id, "name": client.name, "count": len(items), "oldest_hours": oh}
+            )
+            if oh is not None and (result[key]["oldest_hours"] is None or oh > result[key]["oldest_hours"]):
+                result[key]["oldest_hours"] = oh
+    for k in result:
+        result[k]["by_client"].sort(key=lambda x: x["count"], reverse=True)
+    return {**result, "thresholds": _NOTIFY_THRESHOLDS}
+
+
 @router.post("/posts/{post_id}/dismiss")
 def dismiss_post(post_id: int, db: Session = Depends(get_db)):
     """Remove a post from the feed without replying to it."""

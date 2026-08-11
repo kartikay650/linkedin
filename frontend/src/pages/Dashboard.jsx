@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "../api.js";
 import Sidebar from "../components/Sidebar.jsx";
 import PostCard from "../components/PostCard.jsx";
@@ -26,6 +26,10 @@ export default function Dashboard() {
   const [usage, setUsage] = useState([]);
   const [view, setView] = useState("active");
   const [counts, setCounts] = useState(null);
+  const [summary, setSummary] = useState(null);
+  // Which stages have already popped an alert this session, so the pop-up fires once per
+  // threshold-crossing instead of on every poll. Resets when a stage drops back under.
+  const alertedRef = useRef({ to_post: false, to_approve: false });
 
   useEffect(() => {
     api.apifyUsage().then(setUsage).catch(() => {});
@@ -59,6 +63,45 @@ export default function Dashboard() {
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
+
+  // Agency-wide "what's waiting" summary — powers the sidebar badge and the pop-up.
+  // Polled (badge doesn't need sub-minute accuracy) and refreshed after a sync.
+  const loadSummary = useCallback(() => {
+    api.notificationsSummary().then(setSummary).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadSummary();
+    const id = setInterval(loadSummary, 60000);
+    return () => clearInterval(id);
+  }, [loadSummary]);
+
+  // Fire the pop-up when a stage crosses its threshold (count OR age), once per crossing.
+  useEffect(() => {
+    if (!summary) return;
+    const th = summary.thresholds || {};
+    const check = (key, label) => {
+      const s = summary[key];
+      const t = th[key];
+      if (!s || !t) return;
+      const over = s.total >= t.count || (s.oldest_hours != null && s.oldest_hours >= t.hours);
+      if (over && !alertedRef.current[key]) {
+        alertedRef.current[key] = true;
+        const age = s.oldest_hours != null ? ` (oldest ${fmtAge(s.oldest_hours)})` : "";
+        toast(`${s.total} ${label}${age}. Click a client in the sidebar to handle them.`, "info");
+      } else if (!over) {
+        alertedRef.current[key] = false;
+      }
+    };
+    check("to_post", "comments approved and waiting to post");
+    check("to_approve", "comments waiting for approval");
+  }, [summary]);
+
+  // Jump straight to a client's stage tab from the sidebar notification breakdown.
+  const goToStage = (clientId, stageView) => {
+    setSelectedClientId(clientId);
+    setView(stageView);
+  };
 
   const handleSync = async (force = false) => {
     setSyncing(true);
@@ -106,6 +149,7 @@ export default function Dashboard() {
         if (!appeared)
           setSyncNote("Done. Nothing new for this client yet — posts may still be arriving, check back shortly.");
       }
+      loadSummary(); // refresh the waiting counts after a sync
       setTimeout(() => setSyncNote(null), 12000);
     } catch (e) {
       setSyncError(e.message || "Sync failed.");
@@ -129,6 +173,8 @@ export default function Dashboard() {
         selectedId={selectedClientId}
         clientMode={isPostView}
         activeView={view}
+        summary={summary}
+        onGoToStage={goToStage}
         onSelectClient={(id) => { setSelectedClientId(id); setView("active"); }}
         onNavigate={setView}
         onAddClient={() => setShowAddClient(true)}
@@ -287,7 +333,7 @@ export default function Dashboard() {
             subtitle="Nothing from the last 14 days yet. Hit Sync all to pull the latest, or check back after the morning sync."
           />
         ) : (
-          posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => loadPosts(true)} />)
+          posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => { loadPosts(true); loadSummary(); }} />)
         )}
 
         {isPostView && usage.length > 0 && (
@@ -325,6 +371,14 @@ export default function Dashboard() {
       <Toaster />
     </div>
   );
+}
+
+// Compact age label from hours: "3d" / "5h" / "just now".
+function fmtAge(hours) {
+  if (hours == null) return "";
+  if (hours >= 48) return `${Math.round(hours / 24)}d`;
+  if (hours >= 1) return `${Math.round(hours)}h`;
+  return "just now";
 }
 
 function SkeletonList() {

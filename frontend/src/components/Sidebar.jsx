@@ -6,8 +6,22 @@ const WORKSPACE_NAV = [
   ["analytics", "Analytics", "Pipeline across all clients"],
 ];
 
-export default function Sidebar({ clients, selectedId, clientMode, activeView, onSelectClient, onNavigate, onAddClient }) {
+// The two hand-off stages surfaced in the "Waiting" panel. view = the tab to open.
+const WAITING_ROWS = [
+  { key: "to_post", label: "To post", view: "approved", color: "#047857" },
+  { key: "to_approve", label: "To approve", view: "draft", color: "#b45309" },
+];
+
+function ageLabel(h) {
+  if (h == null) return "";
+  if (h >= 48) return `${Math.round(h / 24)}d`;
+  if (h >= 1) return `${Math.round(h)}h`;
+  return "new";
+}
+
+export default function Sidebar({ clients, selectedId, clientMode, activeView, summary, onGoToStage, onSelectClient, onNavigate, onAddClient }) {
   const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState(null);
 
   const filtered = clients.filter((c) =>
     `${c.name} ${c.specialty}`.toLowerCase().includes(query.toLowerCase())
@@ -30,6 +44,79 @@ export default function Sidebar({ clients, selectedId, clientMode, activeView, o
         <div style={{ fontWeight: 700, fontSize: 16 }}>Engagement Queue</div>
         <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{clients.length} clients</div>
       </div>
+
+      {/* Always-on "what's waiting" across ALL clients — the poster/approver's at-a-glance
+          signal. Click a stage to see which clients have items; click a client to jump there. */}
+      {summary && (
+        <div style={{ padding: "0 8px 10px" }}>
+          <div style={sectionLabel}>Waiting</div>
+          {WAITING_ROWS.map(({ key, label, view, color }) => {
+            const s = summary[key] || { total: 0, by_client: [] };
+            const t = (summary.thresholds || {})[key] || {};
+            const over =
+              (t.count != null && s.total >= t.count) ||
+              (t.hours != null && s.oldest_hours != null && s.oldest_hours >= t.hours);
+            const open = expanded === key;
+            const byClient = s.by_client || [];
+            return (
+              <div key={key}>
+                <button
+                  onClick={() => setExpanded(open ? null : key)}
+                  title={over ? "Over the alert threshold — needs attention" : ""}
+                  style={{
+                    display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between",
+                    padding: "8px 12px", marginBottom: 2, borderRadius: 8, border: "none",
+                    background: open ? "#f1f5f9" : "transparent", cursor: "pointer",
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{open ? "▾" : "▸"}</span>
+                    <span style={{ fontWeight: 600, fontSize: 14, color: "var(--text)" }}>{label}</span>
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    {s.total > 0 && s.oldest_hours != null && (
+                      <span style={{ fontSize: 11, color: over ? "var(--danger)" : "var(--text-muted)" }}>
+                        {ageLabel(s.oldest_hours)}
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        minWidth: 20, height: 20, padding: "0 6px", borderRadius: 999,
+                        fontSize: 12, fontWeight: 700, color: "#fff",
+                        background: s.total === 0 ? "#cbd5e1" : over ? "var(--danger)" : color,
+                      }}
+                    >
+                      {s.total}
+                    </span>
+                  </span>
+                </button>
+                {open && byClient.map((bc) => (
+                  <button
+                    key={bc.id}
+                    onClick={() => onGoToStage(bc.id, view)}
+                    style={{
+                      display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between",
+                      padding: "6px 12px 6px 30px", marginBottom: 2, borderRadius: 8, border: "none",
+                      background: "transparent", cursor: "pointer", fontSize: 13, color: "var(--text)",
+                    }}
+                  >
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bc.name}</span>
+                    <span style={{ color: "var(--text-muted)" }}>
+                      {bc.count}{bc.oldest_hours != null ? ` · ${ageLabel(bc.oldest_hours)}` : ""}
+                    </span>
+                  </button>
+                ))}
+                {open && byClient.length === 0 && (
+                  <div style={{ padding: "4px 12px 6px 30px", fontSize: 12, color: "var(--text-muted)" }}>
+                    Nothing waiting.
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Agency-wide pages */}
       <div style={{ padding: "0 8px 8px" }}>
