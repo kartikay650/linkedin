@@ -1,52 +1,25 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
 
 from app.config import settings
 from app.llm.humanize import humanize_comments
-from app.llm.style import HOUSE_STYLE, STRONG_EXAMPLES, check_violations, has_formula, has_negation_device
+from app.llm.style import HOUSE_STYLE, check_violations, has_negation_device
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
 _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-PROMPT = """You are writing ONE LinkedIn comment reply AS {name}. The single most important thing: the reply must be \
-indistinguishable from something she typed herself. Not "in her style" — actually hers.
 
-=== HOW SHE ACTUALLY WRITES (study this hard, match it exactly) ===
-{voice}
-=== END ===
+def _call(model: str, prompt: str, max_tokens: int = 800, timeout: float = 45.0):
+    """One thinking-disabled message call (pinned SDK). Used by every step of the reasoning
+    drafter — brief, plan, draft, critique, tighten."""
+    return _client.with_options(max_retries=1, timeout=timeout).messages.create(
+        model=model, max_tokens=max_tokens, extra_body={"thinking": {"type": "disabled"}},
+        messages=[{"role": "user", "content": prompt}],
+    )
 
-{voice_examples}
-
-{brand}
-
-{house_style}
-
-{examples}
-
-{benchmark}
-
-{feedback}
-
-{avoid}
-
-The post she is replying to:
-Author: {author}
-\"\"\"
-{content}
-\"\"\"
-
-Write ONE reply that:
-- sounds exactly like her voice samples above — same sentence length, rhythm, vocabulary level, and bluntness,
-- reacts to one specific thing in THIS post, never a generic reaction that could sit under any post,
-- MATCHES THE POST'S REGISTER: if this is a personal story, reflection, or something vulnerable, be warm and human and skip the science, data, and opinions; if it's light or casual, keep it light; bring the expert/scientific voice ONLY when the post is genuinely technical or scientific,
-- does NOT force an opinion where none is needed: default to a specific observation or a genuine question, and take a firm stance ONLY when the post is squarely about her expertise and clearly invites one,
-- is SHORT (one or two sentences, ~15-25 words) with at most one claim,
-- is structurally different from her recent comments shown above, and NEVER uses the "shows up before symptoms/diagnosis/a scan" construction or the words "tends to" / "seems to",
-- obeys every house-style and content-safety rule above, and obeys her CTA rules and guardrails.
-{nudge}
-Respond ONLY with JSON: {{"drafts": ["your one reply"]}}"""
 
 REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, following the operator's instruction. \
 Keep it unmistakably in her voice and obey every house-style rule.
@@ -97,13 +70,7 @@ def _strip_negation(text: str) -> str:
         if not has_negation_device(out):
             return out
         try:
-            message = _client.with_options(max_retries=1, timeout=30.0).messages.create(
-                model=settings.draft_model,
-                max_tokens=400,
-                extra_body={"thinking": {"type": "disabled"}},
-                messages=[{"role": "user", "content": STRIP_NEGATION_PROMPT.format(text=out)}],
-            )
-            cand = str(extract_json(message).get("text", "")).strip()
+            cand = str(extract_json(_call(settings.draft_model, STRIP_NEGATION_PROMPT.format(text=out), 400, 30.0)).get("text", "")).strip()
             if cand:
                 out = cand
         except Exception:
@@ -121,19 +88,6 @@ def _voice_block(client: Client) -> str:
     if guide:
         parts.append("How they write:\n" + guide)
     return "\n\n".join(parts) if parts else "Direct, plain, specific. No fluff."
-
-
-def _brand_block(client: Client) -> str:
-    sections = [
-        ("Their viewpoints / stances", client.viewpoints),
-        ("Audience they're speaking to", client.audience),
-        ("Key messages / proof points", client.key_messages),
-        ("Their personal why / stories (use for genuine human touch, never fabricate)", client.personal_story),
-        ("CTA rules", client.cta_rules),
-        ("Guardrails (hard rules)", client.guardrails),
-    ]
-    parts = [f"{label}:\n{value.strip()}" for label, value in sections if value and value.strip()]
-    return ("=== BRAND CONTEXT ===\n" + "\n\n".join(parts) + "\n=== END ===") if parts else ""
 
 
 def _benchmark_block(client: Client) -> str:
@@ -187,8 +141,7 @@ def _avoid_block(avoid_texts: list[str] | None) -> str:
     return (
         "=== RECENT COMMENTS ALREADY WRITTEN FOR THIS CLIENT — do NOT sound like these ===\n"
         "Your reply must be clearly different from every one below: a different opening word, a "
-        "different sentence shape, a different angle. Do not reuse their phrasings, and never repeat "
-        "the 'shows up before symptoms/diagnosis/a scan' construction.\n" + lines + "\n=== END ==="
+        "different sentence shape, a different angle. Do not reuse their phrasings.\n" + lines + "\n=== END ==="
     )
 
 
@@ -259,17 +212,6 @@ def _self_awareness_block(profile: dict | None) -> str:
     return "=== BREAK YOUR OWN PATTERN ===\n" + header + "\n" + "\n".join(rules) + "\n=== END ==="
 
 
-# Comment shapes the drafter rotates through so no single shape (e.g. the question) dominates.
-_SHAPE_NUDGES = {
-    "observation": "Shape for this one: a specific observation about ONE detail in the post, stated plainly. A statement, not a question.",
-    "reaction": "Shape for this one: a short, blunt human reaction to one specific thing. One sentence is ideal. A statement, not a question.",
-    "affirmation": "Shape for this one: plainly affirm or build on the core idea in her own words. A statement, not a question.",
-    "technical": "Shape for this one: one specific, grounded point about the substance, stated plainly. A statement, not a question.",
-    "question": "Shape for this one: ask ONE genuine, specific question the author would enjoy answering. Do NOT start it with 'Curious' or 'Wondering' — open with the real question word.",
-}
-_SHAPE_ORDER = ["observation", "reaction", "technical", "affirmation", "question"]
-
-
 def _draft_problems(text: str, avoid_texts: list[str] | None, profile: dict | None = None) -> list[str]:
     """Deterministic quality gate: house-style violations (incl. the over-used template,
     length, negation, slop), reusing a recent comment's opening, and — adaptively — matching
@@ -290,33 +232,144 @@ def _draft_problems(text: str, avoid_texts: list[str] | None, profile: dict | No
     return problems
 
 
-def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str, voice_ex_block: str = "") -> str:
-    message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
-        model=settings.draft_model,
-        max_tokens=800,
-        # Thinking off (pinned SDK); the house style + humanizer carry the quality rules.
-        extra_body={"thinking": {"type": "disabled"}},
-        messages=[{
-            "role": "user",
-            "content": PROMPT.format(
-                name=client.name,
-                voice=_voice_block(client),
-                voice_examples=voice_ex_block,
-                brand=_brand_block(client),
-                house_style=HOUSE_STYLE,
-                examples=STRONG_EXAMPLES,
-                benchmark=_benchmark_block(client),
-                feedback=_feedback_block(client),
-                avoid=avoid_block,
-                nudge=("\n" + nudge if nudge else ""),
-                author=post.author_name,
-                content=post.content_snippet,
-            ),
-        }],
+# --- Reasoning drafter -------------------------------------------------------
+# Instead of hand-coded heuristics deciding what to say, the model REASONS per-post about how
+# the post should be answered — engage a real argument (even under a personal/novelty hook) vs
+# honour a genuinely human moment — grounds any substance in the client's OWN material (so it's
+# never invented), drafts to that plan, and self-critiques against it. The self-aware
+# anti-repetition memory, humanizer, negation strip, and violation/length guardrails all still
+# run around it. See the "reasoning, not a flag" design (2026-08).
+
+_BRIEF_PROMPT = """Distill what {name} actually knows and believes into a tight brief a writer can use to add \
+substance to comments. Use ONLY the material below — NEVER invent facts, studies, numbers, or positions she has \
+not expressed. If it is not in the material, leave it out.
+{material}
+Return 6-10 short bullet lines: her core positions and the specific points she can credibly make. Plain language, no preamble."""
+
+
+def _expertise_brief(client: Client, voice_examples: list[str] | None) -> str:
+    """A grounded brief of what the client actually knows/believes, distilled ONLY from their own
+    material (viewpoints, key messages, audience, voice samples, guardrails, approved comments) so
+    the drafter can be substantive WITHOUT inventing. Generated on the fly on the fast model and
+    reused across this post's candidates (garbage-in guard: nothing here that isn't in her material,
+    and the provenance check still backstops the final draft)."""
+    mats = []
+    for label, val in (
+        ("VIEWPOINTS", client.viewpoints), ("KEY MESSAGES", client.key_messages),
+        ("AUDIENCE", client.audience), ("HER OWN WORDS", client.voice_samples),
+        ("GUARDRAILS", client.guardrails),
+    ):
+        if (val or "").strip():
+            mats.append(f"{label}: {val.strip()[:2000]}")
+    appr = [t.strip() for t in (voice_examples or []) if t and t.strip()][:8]
+    if appr:
+        mats.append("APPROVED COMMENTS: " + "\n".join(appr)[:1200])
+    if not mats:
+        return ""
+    try:
+        return _call(settings.relevance_model, _BRIEF_PROMPT.format(name=client.name, material="\n".join(mats)), 700, 30.0).content[0].text.strip()
+    except Exception:
+        return ""
+
+
+_PLAN_PROMPT = """You are deciding how {name} should reply to a LinkedIn post. THINK IT THROUGH, then give a directive.
+
+Her expertise (use ONLY if the reply should be substantive):
+{brief}
+
+Reason about THIS post:
+1. What is the author actually DOING — making an argument/claim, sharing news or data, venting or being vulnerable, \
+celebrating a milestone, or posting a motivational affirmation? Look PAST the opening hook or novelty framing to the real purpose.
+2. Do they INVITE a substantive/expert response, or is this a human moment where a clinical/biomarker reply would feel \
+tone-deaf or salesy — even if the topic is technically in her field?
+3. Given that, what should she actually say — and what should she NOT do?
+
+Return ONLY JSON:
+{{"read": "2-3 sentences of your reasoning for points 1-3",
+  "approach": "ONE directive telling the writer exactly how to respond: the tone AND what to engage. Be explicit if she should NOT bring science/biomarkers/data here.",
+  "core": "the post's main point if it makes one, else empty string",
+  "can_add": ["if the reply should be substantive: 1-3 grounded points from her expertise (no invented facts); else empty"],
+  "avoid": ["the hook/novelty/peripheral not to center on; include 'no clinical or biomarker talk' if this is a human moment"]}}
+
+Post by {author}:
+\"\"\"{content}\"\"\""""
+
+
+def _plan(client: Client, post: Post, brief: str) -> dict:
+    """The reasoning step: decide how THIS post should be answered. Falls back to an empty plan
+    (drafter then leans on house style) if the call fails."""
+    try:
+        p = extract_json(_call(settings.draft_model,
+            _PLAN_PROMPT.format(name=client.name, brief=(brief or "(no brief available)"),
+                                author=post.author_name, content=post.content_snippet), 700, 45.0))
+    except Exception:
+        p = {}
+    if not isinstance(p, dict):
+        p = {}
+    for k, d in (("read", ""), ("approach", ""), ("core", ""), ("can_add", []), ("avoid", [])):
+        p.setdefault(k, d)
+    return p
+
+
+def _rules_block(client: Client) -> str:
+    """Only the HARD constraints (CTA rules + guardrails) — the knowledge itself lives in the brief."""
+    parts = []
+    if (client.cta_rules or "").strip():
+        parts.append("CTA rules:\n" + client.cta_rules.strip())
+    if (client.guardrails or "").strip():
+        parts.append("Guardrails (hard rules):\n" + client.guardrails.strip())
+    return ("=== HARD RULES ===\n" + "\n\n".join(parts) + "\n=== END ===") if parts else ""
+
+
+_DRAFT_PROMPT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something she typed.
+
+=== HOW SHE ACTUALLY WRITES (match exactly) ===
+{voice}
+=== END ===
+
+{voice_examples}
+
+=== HOW TO RESPOND HERE (follow this exactly) ===
+{approach}
+Core point of the post: {core}
+What she could add (only if the approach calls for substance — otherwise ignore this): {can_add}
+Do NOT center on / do NOT do: {avoid}
+If (and ONLY if) the approach calls for substance, ground it in what she actually knows (never invent):
+{brief}
+=== END ===
+
+{rules}
+
+{house_style}
+
+{feedback}
+
+{memory}
+
+The post she is replying to:
+Author: {author}
+\"\"\"
+{content}
+\"\"\"
+{shape}
+Write ONE reply that follows the approach exactly: if it says stay human, be warm and specific to what they said and bring \
+NO science, data, or biomarkers; if it says engage the argument, add a grounded point in her voice. Always SHORT (one or two \
+sentences, MAX 22 words), at most one claim, structurally different from her recent comments, and never the words "tends to" / "seems to". \
+Respond ONLY with JSON: {{"drafts": ["your one reply"]}}"""
+
+
+def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
+                          voice_ex_block: str, memory_block: str, shape: str) -> str:
+    prompt = _DRAFT_PROMPT.format(
+        name=client.name, voice=_voice_block(client), voice_examples=voice_ex_block,
+        approach=plan.get("approach", ""), core=plan.get("core", ""),
+        can_add="; ".join(plan.get("can_add") or []), avoid="; ".join(plan.get("avoid") or []),
+        brief=(brief or "(none)"), rules=_rules_block(client), house_style=HOUSE_STYLE,
+        feedback=_feedback_block(client), memory=memory_block,
+        author=post.author_name, content=post.content_snippet, shape=("\n" + shape if shape else ""),
     )
     try:
-        data = extract_json(message)
-        drafts = [str(d) for d in data["drafts"] if str(d).strip()]
+        drafts = [str(d) for d in extract_json(_call(settings.draft_model, prompt, 800, 45.0))["drafts"] if str(d).strip()]
     except (ValueError, KeyError):
         return ""
     drafts = humanize_comments(drafts, _voice_block(client))
@@ -324,97 +377,133 @@ def _generate_once(client: Client, post: Post, avoid_block: str, nudge: str, voi
     return drafts[0] if drafts else ""
 
 
-def _one_candidate(client: Client, post: Post, avoid: list[str], shape_nudge: str, voice_ex_block: str,
-                   aware_block: str = "", profile: dict | None = None) -> str:
-    """One reply + a single self-correction pass if it trips the quality gate."""
-    block = "\n\n".join(b for b in (aware_block, _avoid_block(avoid)) if b)
-    best = _generate_once(client, post, block, nudge=shape_nudge, voice_ex_block=voice_ex_block)
-    if not best:
-        return ""
-    # Loop-until-clean (max 2 retries): when we suppress one crutch (questions/'Curious')
-    # the model tends to fall back to ANOTHER (the 'X before a scan/symptoms' template), so a
-    # single retry often isn't enough. Keep the version with the fewest problems; stop as soon
-    # as one is clean. Retries only fire when a draft is still flawed, so clean drafts cost nothing.
-    best_problems = _draft_problems(best, avoid, profile)
-    tries = 0
-    while best_problems and tries < 2:
-        tries += 1
-        nudge = (
-            (shape_nudge + " ") if shape_nudge else ""
-        ) + (
-            "Your previous attempt failed for these reasons: " + "; ".join(best_problems) + ". "
-            "Write a COMPLETELY different comment that fixes ALL of them — different opening word, "
-            "different structure, at most one claim, one or two short sentences (never three). Do NOT "
-            "use 'Curious', do NOT ask a question unless the shape above tells you to, never say "
-            "'tends to'/'seems to', and NEVER use the construction where something 'shows up' / 'starts' "
-            "/ 'loses capacity' / 'begins' BEFORE a scan, symptoms, a diagnosis, or bloodwork — that "
-            "template is banned."
-        )
-        retry = _generate_once(client, post, block, nudge=nudge, voice_ex_block=voice_ex_block)
-        if not retry:
+_CRIT_PROMPT = ('Intended approach for this comment: "{approach}". The draft: "{d}". Does it FOLLOW that approach — '
+                'right tone, engages the right thing, not tone-deaf, not shallow, not clinical/salesy where it should be '
+                'human, not centred on a peripheral hook? Respond ONLY with JSON: {{"ok": true or false, "fix": "short instruction if not ok, else empty"}}')
+
+# The post's OWN topic is pre-diagnosis / early-marker / prevention -> "before diagnosis/symptoms"
+# phrasing is ON-TOPIC here, not the banned canned tic. Context-gate the formula check so the
+# anti-repetition guardrail stops fighting these clients' actual subject matter (preventive medicine
+# is literally "act before symptoms"). The self-aware memory still prevents REPEATED phrasing.
+_PREDIAG_RE = re.compile(
+    r"\b(diagnos|before symptom|reactive|too late|drift|marker|intervene|prevent|early detection|screen|"
+    r"longevity|proactive|healthspan|biological age|risk score|threshold|aging|ageing|epigenetic|glycan|"
+    r"biomarker|hormone|estrogen|menopause|inflammation)\b", re.I)
+
+
+def _prediagnosis(post: Post) -> bool:
+    return bool(_PREDIAG_RE.search(post.content_snippet or ""))
+
+
+def _wc(text: str) -> int:
+    return len(re.findall(r"[A-Za-z']+", text or ""))
+
+
+def _hard_problems(text: str, avoid: list[str], allow_formula: bool) -> list[str]:
+    """House-style/length/repetition violations worth a regenerate. Drops the 'before symptoms'
+    formula flag when the post itself is about pre-diagnosis action (then it's on-topic)."""
+    probs = _draft_problems(text, avoid, None)
+    if allow_formula:
+        probs = [p for p in probs if "shows up" not in p]
+    return probs
+
+
+def _tighten(text: str, allow_formula: bool) -> str:
+    """HARD length/formula guardrail: if a draft runs long or uses a banned construction, force a
+    tight rewrite; keep it only if genuinely cleaner. Runs at most twice."""
+    for _ in range(2):
+        v = check_violations(text)
+        if allow_formula:
+            v = [x for x in v if "shows up" not in x]
+        if not (any(("wordy" in x or "sentences" in x or "hedge" in x or "shows up" in x) for x in v) or _wc(text) > 26):
             break
-        rp = _draft_problems(retry, avoid, profile)
-        if len(rp) < len(best_problems):
-            best, best_problems = retry, rp
-    return best
+        extra = "" if allow_formula else ' Do NOT use the vague "X before symptoms/diagnosis/a scan" template.'
+        try:
+            nt = str(extract_json(_call(settings.draft_model,
+                f'Rewrite in ONE or two short sentences, MAX 22 words, keeping the exact point and her voice. '
+                f'Remove any "tends to"/"seems to".{extra} Comment: "{text}". Respond ONLY with JSON: {{"text": "..."}}',
+                300, 30.0)).get("text", "")).strip()
+        except Exception:
+            break
+        nv = check_violations(nt)
+        if allow_formula:
+            nv = [x for x in nv if "shows up" not in x]
+        if nt and len(nv) <= len(v) and _wc(nt) <= _wc(text):
+            text = nt
+        else:
+            break
+    return text
+
+
+def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid: list[str],
+                      voice_ex_block: str, memory_block: str, shape: str) -> str:
+    """One reply: draft to the plan, self-critique against the approach + rule-gate, regenerate once
+    if off, then hard-tighten length/formula."""
+    allow = _prediagnosis(post)
+    text = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block, shape)
+    if not text:
+        return ""
+    try:
+        crit = extract_json(_call(settings.relevance_model, _CRIT_PROMPT.format(approach=plan.get("approach", ""), d=text), 200, 25.0))
+    except Exception:
+        crit = {}
+    if not isinstance(crit, dict):
+        crit = {}
+    probs = _hard_problems(text, avoid, allow)
+    too_long = _wc(text) > 26
+    if crit.get("ok") is False or probs or too_long:
+        fix = ("Fix: " + str(crit.get("fix", "")) + ". ") if crit.get("ok") is False else ""
+        if probs:
+            fix += "Also fix: " + "; ".join(probs) + ". "
+        if too_long:
+            fix += "Make it MAX 20 words. "
+        retry = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block, (shape + " " + fix).strip())
+        if retry:
+            text = retry
+    return _tighten(text, allow)
 
 
 def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,
                     voice_examples: list[str] | None = None, global_texts: list[str] | None = None) -> list[str]:
-    """Generate `count` DIVERSE candidates. Anti-repetition is now SELF-AWARE: from the tool's
-    own recent output (this client's recent comments in `avoid_texts` + a global cross-client
-    sample in `global_texts`) we build an `output_profile` and (1) inject a "break your own
-    pattern" block telling the model to avoid whatever it is currently over-using (the 'Curious
-    ...?' question tic today), (2) rotate each candidate through a DIFFERENT comment shape,
-    dropping the question shape entirely when questions are already over-used, and (3) fail a
-    draft in the self-correction gate if it matches the over-used pattern. `voice_examples` are
-    comments the team approved for this client — the learning-loop voice anchor."""
+    """Generate `count` DIVERSE candidates via the reasoning drafter: distil a grounded brief of what
+    the client actually knows, REASON about how this specific post should be answered (engage a real
+    argument — even under a personal/novelty hook — vs honour a human moment), draft to that plan
+    grounded in her material, and self-critique against it. The self-aware anti-repetition memory
+    (from `avoid_texts` + `global_texts`), humanizer, negation strip, and violation/length guardrails
+    all still run. `voice_examples` = comments the team approved (learning-loop voice anchor + part of
+    the grounding brief). Candidates run in parallel to stay well under the serverless time budget."""
     base_avoid = list(avoid_texts or [])
-    profile = output_profile(base_avoid + list(global_texts or []))
+    brief = _expertise_brief(client, voice_examples)
+    plan = _plan(client, post, brief)
     voice_ex_block = _voice_examples_block(voice_examples)
-    aware_block = _self_awareness_block(profile)
-    # Which shapes are allowed this round — drop the question when it's already over-used, so
-    # questions become an occasional shape rather than the default.
-    drop_q = bool(profile and (profile["q_rate"] >= 0.25 or profile["curious_rate"] >= 0.06))
-    shapes = [s for s in _SHAPE_ORDER if not (s == "question" and drop_q)]
-    # Rotate deterministically by post id so shapes vary across posts without randomness.
-    start = (getattr(post, "id", 0) or 0) % len(shapes)
+    profile = output_profile(base_avoid + list(global_texts or []))
+    memory_block = "\n\n".join(b for b in (_self_awareness_block(profile), _avoid_block(base_avoid)) if b)
+    # Option 1 is free; option 2+ must take a clearly different opening/angle (still on the approach).
+    n = max(1, count)
+    shapes = [""] + ["Take a clearly different opening and angle from the other option(s), still following the approach above."] * (n - 1)
+
+    def one(sh: str) -> str:
+        return _reason_candidate(client, post, brief, plan, base_avoid, voice_ex_block, memory_block, sh)
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(n, 3)) as ex:
+            results = list(ex.map(one, shapes))
+    except Exception:
+        results = [one(sh) for sh in shapes]
     out: list[str] = []
-    for i in range(max(1, count)):
-        shape = shapes[(start + i) % len(shapes)]
-        shape_nudge = _SHAPE_NUDGES[shape]
-        if out:
-            shape_nudge += (" Make it clearly different from the option(s) already written below — a "
-                            "different opening word and a different angle, not a rephrasing.")
-        text = _one_candidate(client, post, out + base_avoid, shape_nudge=shape_nudge,
-                              voice_ex_block=voice_ex_block, aware_block=aware_block, profile=profile)
-        if text and text not in out:
-            out.append(text)
+    for t in results:
+        if t and t not in out:
+            out.append(t)
     return out
 
 
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:
     """Revise a single draft per an operator instruction (e.g. 'shorter', 'more personal')."""
-    message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
-        model=settings.draft_model,
-        max_tokens=800,
-        extra_body={"thinking": {"type": "disabled"}},  # single-call refine — house style carries the AI-tell bans
-        messages=[{
-            "role": "user",
-            "content": REFINE_PROMPT.format(
-                name=client.name,
-                voice=_voice_block(client),
-                house_style=HOUSE_STYLE,
-                benchmark=_benchmark_block(client),
-                feedback=_feedback_block(client),
-                content=post.content_snippet,
-                current=current_text,
-                instruction=instruction,
-            ),
-        }],
-    )
     try:
-        data = extract_json(message)
+        data = extract_json(_call(settings.draft_model, REFINE_PROMPT.format(
+            name=client.name, voice=_voice_block(client), house_style=HOUSE_STYLE,
+            benchmark=_benchmark_block(client), feedback=_feedback_block(client),
+            content=post.content_snippet, current=current_text, instruction=instruction), 800, 45.0))
         revised = str(data["draft"])
     except (ValueError, KeyError):
         return current_text
