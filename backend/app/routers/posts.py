@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
@@ -69,6 +69,29 @@ def _visible_posts(db: Session, client_id: int, max_age_days: int) -> list[Post]
                 p for p in posts
                 if (profile_slug(p.author_profile_url) or profile_slug(p.source_ref)) not in excluded
             ]
+
+    # Drop 0/10-relevance posts from EVERY view — they only clutter the queue. Keep a post if
+    # it's unscored (scoring may still be pending) or already has in-progress work. These are
+    # filtered, not deleted, so the threshold can be relaxed later if the scorer ever zeroes a
+    # genuinely good post.
+    def too_irrelevant(post):
+        s = post.relevance_score
+        return s is not None and round(s * 10) < 1 and not has_working_draft(post)
+
+    posts = [p for p in posts if not too_irrelevant(p)]
+
+    # Order: newest DAY first, then most-relevant WITHIN each day (ties -> newest time). This
+    # surfaces fresh posts without discarding relevance — a barely-relevant newer post no longer
+    # buries a highly-relevant one from the same day. Recency uses the post's publish date
+    # (posted_at), falling back to fetch time only when there's no publish date.
+    def _order_key(post):
+        dt = post.posted_at or post.fetched_at
+        if dt and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (dt.date() if dt else date.min, post.relevance_score or 0.0,
+                dt or datetime.min.replace(tzinfo=timezone.utc))
+
+    posts.sort(key=_order_key, reverse=True)
     return posts
 
 
