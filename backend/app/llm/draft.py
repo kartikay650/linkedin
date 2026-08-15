@@ -145,6 +145,22 @@ def _avoid_block(avoid_texts: list[str] | None) -> str:
     )
 
 
+def _siblings_block(texts: list[str] | None, name: str) -> str:
+    """Comments OTHER profiles already made on this SAME post. Shown so this client's reply takes a
+    genuinely different angle (grounded in her own expertise) instead of echoing another profile —
+    the fix for 'two profiles get near-identical comments on the same post'."""
+    ex = [t.strip() for t in (texts or []) if t and t.strip()][:8]
+    if not ex:
+        return ""
+    lines = "\n".join(f"- {t}" for t in ex)
+    return (
+        "=== OTHER PROFILES ALREADY COMMENTED ON THIS EXACT POST ===\n"
+        f"These were written for OTHER people on this same post. {name}'s comment MUST take a genuinely "
+        "different angle, grounded in HER own expertise — not a reword or the same point as these:\n"
+        + lines + "\n=== END ==="
+    )
+
+
 def _opener(text: str) -> str:
     return " ".join(re.findall(r"[a-z']+", (text or "").lower())[:3])
 
@@ -282,11 +298,13 @@ Reason about THIS post:
 celebrating a milestone, or posting a motivational affirmation? Look PAST the opening hook or novelty framing to the real purpose.
 2. Do they INVITE a substantive/expert response, or is this a human moment where a clinical/biomarker reply would feel \
 tone-deaf or salesy — even if the topic is technically in her field?
-3. Given that, what should she actually say — and what should she NOT do?
-
+3. If OTHER profiles have already commented on this exact post (shown below), her take MUST be genuinely different \
+from theirs and grounded in HER OWN distinct expertise — a different angle, not the same point reworded.
+4. Given all that, what should she actually say — and what should she NOT do?
+{siblings}
 Return ONLY JSON:
-{{"read": "2-3 sentences of your reasoning for points 1-3",
-  "approach": "ONE directive telling the writer exactly how to respond: the tone AND what to engage. Be explicit if she should NOT bring science/biomarkers/data here.",
+{{"read": "2-3 sentences of your reasoning for points 1-4",
+  "approach": "ONE directive telling the writer exactly how to respond: the tone AND what to engage. Be explicit if she should NOT bring science/biomarkers/data here, and how her angle differs from any other profiles above.",
   "core": "the post's main point if it makes one, else empty string",
   "can_add": ["if the reply should be substantive: 1-3 grounded points from her expertise (no invented facts); else empty"],
   "avoid": ["the hook/novelty/peripheral not to center on; include 'no clinical or biomarker talk' if this is a human moment"]}}
@@ -295,12 +313,14 @@ Post by {author}:
 \"\"\"{content}\"\"\""""
 
 
-def _plan(client: Client, post: Post, brief: str) -> dict:
-    """The reasoning step: decide how THIS post should be answered. Falls back to an empty plan
-    (drafter then leans on house style) if the call fails."""
+def _plan(client: Client, post: Post, brief: str, siblings_block: str = "") -> dict:
+    """The reasoning step: decide how THIS post should be answered — including taking a distinct angle
+    from any other profiles that already commented on it. Falls back to an empty plan (drafter then
+    leans on house style) if the call fails."""
     try:
         p = extract_json(_call(settings.draft_model,
             _PLAN_PROMPT.format(name=client.name, brief=(brief or "(no brief available)"),
+                                siblings=(("\n" + siblings_block) if siblings_block else ""),
                                 author=post.author_name, content=post.content_snippet), 700, 45.0))
     except Exception:
         p = {}
@@ -464,26 +484,33 @@ def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid:
 
 
 def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,
-                    voice_examples: list[str] | None = None, global_texts: list[str] | None = None) -> list[str]:
+                    voice_examples: list[str] | None = None, global_texts: list[str] | None = None,
+                    sibling_texts: list[str] | None = None) -> list[str]:
     """Generate `count` DIVERSE candidates via the reasoning drafter: distil a grounded brief of what
     the client actually knows, REASON about how this specific post should be answered (engage a real
     argument — even under a personal/novelty hook — vs honour a human moment), draft to that plan
     grounded in her material, and self-critique against it. The self-aware anti-repetition memory
     (from `avoid_texts` + `global_texts`), humanizer, negation strip, and violation/length guardrails
     all still run. `voice_examples` = comments the team approved (learning-loop voice anchor + part of
-    the grounding brief). Candidates run in parallel to stay well under the serverless time budget."""
+    the grounding brief). `sibling_texts` = comments OTHER profiles already made on THIS SAME post, so
+    this client takes a genuinely different, self-tailored angle instead of echoing them. Candidates
+    run in parallel to stay well under the serverless time budget."""
     base_avoid = list(avoid_texts or [])
     brief = _expertise_brief(client, voice_examples)
-    plan = _plan(client, post, brief)
+    siblings_block = _siblings_block(sibling_texts, client.name)
+    plan = _plan(client, post, brief, siblings_block)
     voice_ex_block = _voice_examples_block(voice_examples)
     profile = output_profile(base_avoid + list(global_texts or []))
-    memory_block = "\n\n".join(b for b in (_self_awareness_block(profile), _avoid_block(base_avoid)) if b)
+    memory_block = "\n\n".join(b for b in (_self_awareness_block(profile), siblings_block, _avoid_block(base_avoid)) if b)
+    # Reused-opener gate also considers other profiles' comments on this post, so a second profile
+    # can't open the same way as the first.
+    gate_avoid = base_avoid + [t.strip() for t in (sibling_texts or []) if t and t.strip()]
     # Option 1 is free; option 2+ must take a clearly different opening/angle (still on the approach).
     n = max(1, count)
     shapes = [""] + ["Take a clearly different opening and angle from the other option(s), still following the approach above."] * (n - 1)
 
     def one(sh: str) -> str:
-        return _reason_candidate(client, post, brief, plan, base_avoid, voice_ex_block, memory_block, sh)
+        return _reason_candidate(client, post, brief, plan, gate_avoid, voice_ex_block, memory_block, sh)
 
     try:
         with ThreadPoolExecutor(max_workers=min(n, 3)) as ex:

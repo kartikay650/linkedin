@@ -249,10 +249,27 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
         .order_by(Draft.created_at.desc())
         .limit(8).all()
     ]
+    # Comments OTHER profiles already made on this SAME post (posts share a URL across clients).
+    # Passed so this client takes a genuinely different, self-tailored angle instead of echoing
+    # another profile — the fix for "two profiles get near-identical comments on the same post".
+    siblings = []
+    if post.post_url:
+        seen = set()
+        for d in (
+            db.query(Draft).join(Post, Post.id == Draft.post_id)
+            .filter(Post.post_url == post.post_url, Post.client_id != post.client_id)
+            .order_by(Draft.created_at.desc()).limit(12).all()
+        ):
+            t = (d.edited_text or d.text or "").strip()
+            if t and t not in seen:
+                seen.add(t)
+                siblings.append(t)
+        siblings = siblings[:8]
+
     # Two DIVERSE candidates so the reviewer picks the angle they like (acting on one
     # auto-discards the other — see update_draft).
     texts = generate_drafts(post.client, post, count=2, avoid_texts=recent, voice_examples=approved,
-                            global_texts=global_recent)
+                            global_texts=global_recent, sibling_texts=siblings)
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
