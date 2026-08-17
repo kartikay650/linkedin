@@ -42,6 +42,8 @@ export default function PostCard({ post, onActioned }) {
 
   const TWEAKS = [
     ["Shorter", "make it shorter, one or two sentences at most"],
+    ["Warmer", "make it warmer and more empathetic and human, without any praise opener or clinical jargon"],
+    ["Simpler", "say it in plain, simple language a non-expert would understand, no jargon; keep it natural, not a summary"],
     ["More personal", "make it more personal and human, in her own first-person voice"],
     ["More neutral", "make it more neutral and less opinionated; make the point without pushing a strong personal opinion"],
     ["More scientific", "make it more scientific and clinical in tone: precise, evidence-minded, measured"],

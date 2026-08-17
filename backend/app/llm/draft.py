@@ -21,8 +21,11 @@ def _call(model: str, prompt: str, max_tokens: int = 800, timeout: float = 45.0)
     )
 
 
-REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, following the operator's instruction. \
-Keep it unmistakably in her voice and obey every house-style rule.
+REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, per the operator's instruction — but the
+HOUSE-STYLE RULES BELOW OVERRIDE the instruction wherever they conflict. Apply the instruction's INTENT
+(its tone/angle), never its power to add slop. In particular, no matter what the instruction says: keep it
+to ONE or TWO sentences (never three), keep it roughly under 25 words, NEVER open with a praise/reaction line
+("Great...", "This is...", "It's a great...") or with "Curious"/"I wonder", and keep her real voice.
 
 === HOW SHE ACTUALLY WRITES ===
 {voice}
@@ -34,6 +37,8 @@ Keep it unmistakably in her voice and obey every house-style rule.
 
 {feedback}
 
+{memory}
+
 The post being replied to:
 \"\"\"
 {content}
@@ -44,10 +49,10 @@ Current reply:
 {current}
 \"\"\"
 
-Operator's instruction: {instruction}
+Operator's instruction (apply its intent within the rules above; do not let it introduce praise/curious \
+openers, a third sentence, or slop): {instruction}
 
-Rewrite the reply to follow that instruction while staying in her exact voice and inside every house-style and \
-content-safety rule above. Respond ONLY with JSON: {{"draft": "..."}}"""
+Respond ONLY with JSON: {{"draft": "..."}}"""
 
 
 STRIP_NEGATION_PROMPT = """The comment below uses NEGATION AS A DEVICE — defining something by what it is \
@@ -180,6 +185,17 @@ def _is_question(text: str) -> bool:
     return t.endswith("?") or bool(_SOFT_Q_RE.search(t))
 
 
+# The single most persistent tic — the "Curious ..." / "I wonder ..." OPENER. Banned as a STANDING
+# rule (not only when it's currently over-used), because a purely adaptive suppressor is self-
+# releasing: once the rate drops it switches off and the tic drifts back. A genuine question is
+# still fine — it just can't open this way.
+_CURIOUS_OPENER_RE = re.compile(r"^\s*(curious\b|wondering\b|i\s+wonder\b|i'?d\s+love\s+to\s+(know|hear)\b)", re.I)
+
+
+def _opens_curious(text: str) -> bool:
+    return bool(_CURIOUS_OPENER_RE.match(text or ""))
+
+
 def output_profile(texts: list[str] | None) -> dict | None:
     """The tool's recent OUTPUT signature, so a new draft can steer away from whatever shape
     it has been OVER-using lately — adaptive anti-repetition, not a fixed ban list. Computed
@@ -236,6 +252,8 @@ def _draft_problems(text: str, avoid_texts: list[str] | None, profile: dict | No
     op = _opener(text)
     if op and any(op == _opener(t) for t in (avoid_texts or [])):
         problems.append("same opening as a recent comment")
+    if _opens_curious(text):  # STANDING (always-on) — the persistent tic, not gated on the rate
+        problems.append("opens with 'Curious'/'I wonder' — a banned over-used opener")
     if profile:
         fw = _first_word(text)
         low = (text or "").lower()
@@ -524,15 +542,47 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
     return out
 
 
-def refine_draft(client: Client, post: Post, current_text: str, instruction: str) -> str:
-    """Revise a single draft per an operator instruction (e.g. 'shorter', 'more personal')."""
+def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
+                 memory_block: str) -> str:
     try:
         data = extract_json(_call(settings.draft_model, REFINE_PROMPT.format(
             name=client.name, voice=_voice_block(client), house_style=HOUSE_STYLE,
-            benchmark=_benchmark_block(client), feedback=_feedback_block(client),
+            benchmark=_benchmark_block(client), feedback=_feedback_block(client), memory=memory_block,
             content=post.content_snippet, current=current_text, instruction=instruction), 800, 45.0))
         revised = str(data["draft"])
     except (ValueError, KeyError):
-        return current_text
+        return ""
     out = humanize_comments([revised], _voice_block(client))
-    return _strip_negation(out[0] if out else revised)  # hard-enforce: no negation-as-a-device
+    return _strip_negation(out[0] if out else revised)
+
+
+def refine_draft(client: Client, post: Post, current_text: str, instruction: str,
+                 avoid_texts: list[str] | None = None, voice_examples: list[str] | None = None,
+                 global_texts: list[str] | None = None, sibling_texts: list[str] | None = None) -> str:
+    """Revise a single draft per an operator instruction — now through the SAME guardrails as
+    generate_drafts (they were previously bypassed, which let the 'Curious'/praise-slop tics back in on
+    every tweak). Builds the self-aware anti-repetition memory + sibling context, applies the operator
+    instruction (its INTENT wins, but the house-style/length/no-curious rules OVERRIDE it), then runs the
+    violation/length gate with one corrective regen and a hard tighten. A conflicting tweak prompt (e.g.
+    'open with a strong reaction, 3 sentences') can no longer produce slop."""
+    base_avoid = list(avoid_texts or [])
+    profile = output_profile(base_avoid + list(global_texts or []))
+    memory_block = "\n\n".join(
+        b for b in (_self_awareness_block(profile), _siblings_block(sibling_texts, client.name), _avoid_block(base_avoid)) if b
+    )
+    gate_avoid = base_avoid + [t.strip() for t in (sibling_texts or []) if t and t.strip()]
+    allow = _prediagnosis(post)
+
+    text = _refine_once(client, post, current_text, instruction, memory_block)
+    if not text:
+        return current_text
+    probs = _hard_problems(text, gate_avoid, allow)
+    too_long = _wc(text) > 26
+    if probs or too_long:
+        fix = ("Also strictly fix these: " + "; ".join(probs) + ". ") if probs else ""
+        if too_long:
+            fix += "Keep it to MAX 20 words, one or two sentences. "
+        retry = _refine_once(client, post, current_text, (instruction + " " + fix).strip(), memory_block)
+        if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
+            text = retry
+    return _tighten(text, allow)

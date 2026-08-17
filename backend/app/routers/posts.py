@@ -213,46 +213,29 @@ def apify_usage():
     return account_usage()
 
 
-@router.post("/posts/{post_id}/draft", response_model=list[DraftOut])
-def draft_reply(post_id: int, db: Session = Depends(get_db)):
-    """Generate reply drafts for a post — only ever called explicitly by a human
-    clicking 'Draft reply', never automatically during discovery."""
-    post = db.get(Post, post_id)
-    if not post:
-        raise HTTPException(404, "post not found")
-
-    # The client's recent drafts (across their other posts) — passed so the generator
-    # writes something structurally different and doesn't converge on one template.
+def _draft_context(db: Session, post: Post):
+    """Shared anti-repetition context for BOTH drafting and refining, so a Tweak gets the same
+    guardrail inputs as a fresh Draft: (recent) this client's recent drafts to avoid; (global) a
+    cross-client sample for the self-aware profile; (approved) the client's approved comments
+    (voice/learning); (siblings) comments OTHER profiles already made on this SAME post."""
     recent = [
         r[0] for r in db.query(Draft.text)
         .join(Post, Post.id == Draft.post_id)
         .filter(Post.client_id == post.client_id, Draft.post_id != post.id)
-        .order_by(Draft.created_at.desc())
-        .limit(20).all()
+        .order_by(Draft.created_at.desc()).limit(20).all()
     ]
-    # A GLOBAL sample of the tool's recent output across ALL clients — so `output_profile`
-    # can catch a pattern that spreads across clients (e.g. the "Curious ...?" question tic),
-    # which a per-client-only view misses. See generate_drafts' self-aware anti-repetition.
     global_recent = [
         r[0] for r in db.query(Draft.text)
         .filter(Draft.post_id != post.id)
-        .order_by(Draft.created_at.desc())
-        .limit(40).all()
+        .order_by(Draft.created_at.desc()).limit(40).all()
     ]
-    # Learning loop: comments the team already approved/posted for this client are the
-    # gold standard for their real voice — feed them in so drafts sound less "AI" over
-    # time, with no manual example-seeding. (Final text = the human-edited version.)
     approved = [
         (d.edited_text or d.text) for d in db.query(Draft)
         .join(Post, Post.id == Draft.post_id)
         .filter(Post.client_id == post.client_id, Draft.status.in_(["approved", "posted"]))
-        .order_by(Draft.created_at.desc())
-        .limit(8).all()
+        .order_by(Draft.created_at.desc()).limit(8).all()
     ]
-    # Comments OTHER profiles already made on this SAME post (posts share a URL across clients).
-    # Passed so this client takes a genuinely different, self-tailored angle instead of echoing
-    # another profile — the fix for "two profiles get near-identical comments on the same post".
-    siblings = []
+    siblings: list[str] = []
     if post.post_url:
         seen = set()
         for d in (
@@ -265,6 +248,18 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
                 seen.add(t)
                 siblings.append(t)
         siblings = siblings[:8]
+    return recent, global_recent, approved, siblings
+
+
+@router.post("/posts/{post_id}/draft", response_model=list[DraftOut])
+def draft_reply(post_id: int, db: Session = Depends(get_db)):
+    """Generate reply drafts for a post — only ever called explicitly by a human
+    clicking 'Draft reply', never automatically during discovery."""
+    post = db.get(Post, post_id)
+    if not post:
+        raise HTTPException(404, "post not found")
+
+    recent, global_recent, approved, siblings = _draft_context(db, post)
 
     # Two DIVERSE candidates so the reviewer picks the angle they like (acting on one
     # auto-discards the other — see update_draft).
@@ -301,7 +296,11 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
         raise HTTPException(404, "draft not found")
     post = db.get(Post, draft.post_id)
     current = draft.edited_text or draft.text
-    revised = refine_draft(post.client, post, current, payload.instruction)
+    # Same anti-repetition context as a fresh draft, so a Tweak is fully guarded too (no more
+    # 'Curious'/praise-slop leaking back in through the refine path).
+    recent, global_recent, approved, siblings = _draft_context(db, post)
+    revised = refine_draft(post.client, post, current, payload.instruction, avoid_texts=recent,
+                           voice_examples=approved, global_texts=global_recent, sibling_texts=siblings)
     draft.text = revised
     draft.edited_text = None  # revised text supersedes prior manual edits
     draft.provenance = annotate_provenance(post.client, post, revised, _docs_text(db, post.client_id))
