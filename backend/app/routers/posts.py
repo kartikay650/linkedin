@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, load_only
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
@@ -26,14 +26,30 @@ def _docs_text(db: Session, client_id: int) -> str:
     return "\n\n".join((d.extracted_text or "") for d in docs)
 
 
-def _visible_posts(db: Session, client_id: int, max_age_days: int) -> list[Post]:
+def _visible_posts(db: Session, client_id: int, max_age_days: int, light: bool = False) -> list[Post]:
     """The client's base feed BEFORE the per-tab filter: not dismissed, fresh enough (or
     carrying in-progress work), with the client's own and same-company colleagues' posts
     removed. Shared source of truth for both the post list and the per-tab counts, so the
-    tab badges can never disagree with what a tab actually shows."""
+    tab badges can never disagree with what a tab actually shows.
+
+    `light=True` fetches ONLY the columns the filtering/counting logic actually touches
+    (timestamps, relevance, author, dismissed, and each draft's status/created_at) and NOT the
+    heavy fields (content_snippet, draft text/edited_text, provenance JSON). Same rows, same
+    logic, a fraction of the bytes — used by the count badges and the notification summary so
+    they stop reading megabytes just to produce a few numbers (the main egress fix)."""
+    if light:
+        query = (
+            db.query(Post)
+            .options(
+                load_only(Post.id, Post.client_id, Post.posted_at, Post.fetched_at,
+                          Post.relevance_score, Post.dismissed, Post.author_profile_url, Post.source_ref),
+                joinedload(Post.drafts).load_only(Draft.status, Draft.created_at),
+            )
+        )
+    else:
+        query = db.query(Post).options(joinedload(Post.drafts))
     posts = (
-        db.query(Post)
-        .options(joinedload(Post.drafts))
+        query
         .filter(Post.client_id == client_id, Post.dismissed.is_(False))
         .order_by(Post.relevance_score.desc().nullslast(), Post.fetched_at.desc())
         .all()
@@ -134,7 +150,7 @@ def post_counts(
 ):
     """Per-tab counts for the badge on each tab (Queue/Draft/Approved/Posted/All). Computed
     from the exact same visible set as the list, so the numbers always match the tabs."""
-    posts = _visible_posts(db, client_id, max_age_days)
+    posts = _visible_posts(db, client_id, max_age_days, light=True)
     return {
         "active": sum(1 for p in posts if _in_view(p, "active")),
         "draft": sum(1 for p in posts if _in_view(p, "draft")),
@@ -179,7 +195,7 @@ def notifications_summary(
 
     result = {k: {"total": 0, "oldest_hours": None, "by_client": []} for k in STAGE}
     for client in db.query(Client).order_by(Client.name).all():
-        posts = _visible_posts(db, client.id, max_age_days)
+        posts = _visible_posts(db, client.id, max_age_days, light=True)
         for key, (view, status) in STAGE.items():
             items = [p for p in posts if _in_view(p, view)]
             if not items:

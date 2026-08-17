@@ -70,10 +70,15 @@ export default function Dashboard() {
     api.notificationsSummary().then(setSummary).catch(() => {});
   }, []);
 
+  // Poll every 5 min and ONLY when the tab is actually visible (most open dashboards sit in a
+  // background tab). Refresh immediately when the tab regains focus so it still feels current.
+  // This, with the light-column summary read, is the main egress fix.
   useEffect(() => {
-    loadSummary();
-    const id = setInterval(loadSummary, 60000);
-    return () => clearInterval(id);
+    if (!document.hidden) loadSummary();
+    const id = setInterval(() => { if (!document.hidden) loadSummary(); }, 300000);
+    const onVis = () => { if (!document.hidden) loadSummary(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
   }, [loadSummary]);
 
   // Fire the pop-up when a stage crosses its threshold (count OR age), once per crossing.
@@ -109,11 +114,12 @@ export default function Dashboard() {
     setCanForce(false);
     setSyncNote(force ? "Fetching the latest from every tracked profile…" : "Working out what's due…");
     try {
-      // Baseline the current feed so we can tell when genuinely new posts land.
-      let baseline = posts.length;
+      // Baseline via the LIGHT counts endpoint (not the full feed) so detecting new posts
+      // costs a few bytes, not ~half a MB per check.
+      let baseline = counts?.[view] ?? posts.length;
       if (selectedClientId) {
-        const cur = await api.listPosts(selectedClientId, view).catch(() => null);
-        if (cur) baseline = cur.length;
+        const c0 = await api.postCounts(selectedClientId).catch(() => null);
+        if (c0) baseline = c0[view] ?? baseline;
       }
       // Universal, deduped sync across ALL clients. Without force, cadence means it only
       // fetches profiles actually due, so pressing it again the same day costs ~nothing.
@@ -132,18 +138,20 @@ export default function Dashboard() {
       // post isn't showing": the normal sync deliberately didn't re-check recent profiles.
       if (total === 0 && !force) setCanForce(true);
       if (total > 0) {
-        // Posts arrive asynchronously via webhook and can take a few minutes. Poll the
-        // feed and STOP as soon as new posts appear, so nobody has to refresh by hand.
+        // Posts arrive asynchronously via webhook and can take a few minutes. Poll the LIGHT
+        // counts (cheap) to detect when new posts land, and only pull the full feed ONCE when
+        // they do — instead of re-downloading the whole feed every cycle.
         let appeared = false;
-        for (let i = 0; i < 18 && !appeared; i++) {   // up to ~3 min at 10s intervals
-          await new Promise((r) => setTimeout(r, 10000));
+        for (let i = 0; i < 9 && !appeared; i++) {   // up to ~3 min at 20s intervals
+          await new Promise((r) => setTimeout(r, 20000));
           if (!selectedClientId) break;
-          const fresh = await api.listPosts(selectedClientId, view).catch(() => null);
-          if (!fresh) continue;
-          setPosts(fresh);
-          if (fresh.length > baseline) {
+          const c = await api.postCounts(selectedClientId).catch(() => null);
+          if (c) setCounts(c);
+          const now = c?.[view];
+          if (now != null && now > baseline) {
             appeared = true;
-            setSyncNote(`${fresh.length - baseline} new post${fresh.length - baseline > 1 ? "s" : ""} arrived. More may still be landing.`);
+            loadPosts(true); // one full feed refresh, only now that there's something new
+            setSyncNote(`${now - baseline} new post${now - baseline > 1 ? "s" : ""} arrived. More may still be landing.`);
           }
         }
         if (!appeared)
