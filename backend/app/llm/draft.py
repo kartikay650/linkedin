@@ -12,13 +12,30 @@ from app.models import Client, Post
 _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
 
-def _call(model: str, prompt: str, max_tokens: int = 800, timeout: float = 45.0):
-    """One thinking-disabled message call (pinned SDK). Used by every step of the reasoning
-    drafter — brief, plan, draft, critique, tighten."""
+def _call(model: str, content, max_tokens: int = 800, timeout: float = 45.0):
+    """One thinking-disabled message call (pinned SDK). `content` is either a plain string or a
+    list of content blocks (used for prompt caching — see _blocks). Used by every step of the
+    reasoning drafter — brief, plan, draft, critique, tighten."""
     return _client.with_options(max_retries=1, timeout=timeout).messages.create(
         model=model, max_tokens=max_tokens, extra_body={"thinking": {"type": "disabled"}},
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": content}],
     )
+
+
+def _blocks(*parts):
+    """Build Anthropic content blocks from (text, cache) pairs, dropping empties. A block with
+    cache=True gets `cache_control: ephemeral`, so the whole prefix up to it is cached and reused
+    cheaply by later calls (the main API-cost fix — HOUSE_STYLE + per-client voice/brief are
+    identical across the ~10 calls in a draft and across consecutive drafts)."""
+    out = []
+    for text, cache in parts:
+        if not text or not str(text).strip():
+            continue
+        b = {"type": "text", "text": str(text)}
+        if cache:
+            b["cache_control"] = {"type": "ephemeral"}
+        out.append(b)
+    return out
 
 
 REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, per the operator's instruction — but the
@@ -30,8 +47,6 @@ to ONE or TWO sentences (never three), keep it roughly under 25 words, NEVER ope
 === HOW SHE ACTUALLY WRITES ===
 {voice}
 === END ===
-
-{house_style}
 
 {benchmark}
 
@@ -359,7 +374,15 @@ def _rules_block(client: Client) -> str:
     return ("=== HARD RULES ===\n" + "\n\n".join(parts) + "\n=== END ===") if parts else ""
 
 
-_DRAFT_PROMPT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something she typed.
+# The draft prompt is split into three blocks so the static ones get PROMPT-CACHED (big API-cost
+# saving — the same HOUSE_STYLE and per-client voice/brief are re-sent on every one of a draft's
+# ~10 calls and across drafts). Block 1 = global-static (HOUSE_STYLE + the fixed write rules);
+# block 2 = per-client-static (voice, approved examples, rules, feedback, brief); block 3 = the
+# per-draft variable part (plan, memory, the post). Only 1 and 2 are cached.
+_WRITE_RULES = """=== HOW TO WRITE THIS REPLY ===
+Follow the RESPONSE DIRECTIVE given below. If it says stay human: warm, specific to what they said, bring NO science/data/biomarkers. If it says engage the argument: add a grounded point in her voice. ALWAYS short (one or two sentences, MAX 22 words), at most one claim, structurally different from her recent comments, and never the words "tends to" / "seems to". Respond ONLY with JSON: {"drafts": ["your one reply"]}"""
+
+_DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something she typed.
 
 === HOW SHE ACTUALLY WRITES (match exactly) ===
 {voice}
@@ -367,20 +390,19 @@ _DRAFT_PROMPT = """You are writing ONE LinkedIn comment reply AS {name}. It must
 
 {voice_examples}
 
-=== HOW TO RESPOND HERE (follow this exactly) ===
-{approach}
-Core point of the post: {core}
-What she could add (only if the approach calls for substance — otherwise ignore this): {can_add}
-Do NOT center on / do NOT do: {avoid}
-If (and ONLY if) the approach calls for substance, ground it in what she actually knows (never invent):
-{brief}
-=== END ===
-
 {rules}
 
-{house_style}
-
 {feedback}
+
+=== WHAT SHE ACTUALLY KNOWS (ground any substance ONLY in this — never invent) ===
+{brief}
+=== END ==="""
+
+_DRAFT_VARIABLE = """=== HOW TO RESPOND HERE (follow this exactly) ===
+{approach}
+Core point of the post: {core}
+What she could add (only if the approach calls for substance): {can_add}
+Do NOT center on / do NOT do: {avoid}
 
 {memory}
 
@@ -389,25 +411,25 @@ Author: {author}
 \"\"\"
 {content}
 \"\"\"
-{shape}
-Write ONE reply that follows the approach exactly: if it says stay human, be warm and specific to what they said and bring \
-NO science, data, or biomarkers; if it says engage the argument, add a grounded point in her voice. Always SHORT (one or two \
-sentences, MAX 22 words), at most one claim, structurally different from her recent comments, and never the words "tends to" / "seems to". \
-Respond ONLY with JSON: {{"drafts": ["your one reply"]}}"""
+{shape}"""
 
 
 def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
                           voice_ex_block: str, memory_block: str, shape: str) -> str:
-    prompt = _DRAFT_PROMPT.format(
+    g_static = HOUSE_STYLE + "\n\n" + _WRITE_RULES
+    c_static = _DRAFT_CLIENT.format(
         name=client.name, voice=_voice_block(client), voice_examples=voice_ex_block,
+        rules=_rules_block(client), feedback=_feedback_block(client), brief=(brief or "(none)"),
+    )
+    variable = _DRAFT_VARIABLE.format(
         approach=plan.get("approach", ""), core=plan.get("core", ""),
         can_add="; ".join(plan.get("can_add") or []), avoid="; ".join(plan.get("avoid") or []),
-        brief=(brief or "(none)"), rules=_rules_block(client), house_style=HOUSE_STYLE,
-        feedback=_feedback_block(client), memory=memory_block,
-        author=post.author_name, content=post.content_snippet, shape=("\n" + shape if shape else ""),
+        memory=memory_block, author=post.author_name, content=post.content_snippet,
+        shape=("\n" + shape if shape else ""),
     )
+    content = _blocks((g_static, True), (c_static, True), (variable, False))
     try:
-        drafts = [str(d) for d in extract_json(_call(settings.draft_model, prompt, 800, 45.0))["drafts"] if str(d).strip()]
+        drafts = [str(d) for d in extract_json(_call(settings.draft_model, content, 800, 45.0))["drafts"] if str(d).strip()]
     except (ValueError, KeyError):
         return ""
     drafts = humanize_comments(drafts, _voice_block(client))
@@ -544,11 +566,13 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
 
 def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
                  memory_block: str) -> str:
+    rest = REFINE_PROMPT.format(
+        name=client.name, voice=_voice_block(client),
+        benchmark=_benchmark_block(client), feedback=_feedback_block(client), memory=memory_block,
+        content=post.content_snippet, current=current_text, instruction=instruction)
+    content = _blocks((HOUSE_STYLE, True), (rest, False))  # cache HOUSE_STYLE across tweaks
     try:
-        data = extract_json(_call(settings.draft_model, REFINE_PROMPT.format(
-            name=client.name, voice=_voice_block(client), house_style=HOUSE_STYLE,
-            benchmark=_benchmark_block(client), feedback=_feedback_block(client), memory=memory_block,
-            content=post.content_snippet, current=current_text, instruction=instruction), 800, 45.0))
+        data = extract_json(_call(settings.draft_model, content, 800, 45.0))
         revised = str(data["draft"])
     except (ValueError, KeyError):
         return ""

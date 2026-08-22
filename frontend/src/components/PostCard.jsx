@@ -58,9 +58,9 @@ export default function PostCard({ post, onActioned }) {
       const updated = await api.refineDraft(draft.id, instruction.trim());
       setEditedText((prev) => ({ ...prev, [draft.id]: updated.text }));
       setTweak((prev) => ({ ...prev, [draft.id]: "" }));
-      // Refresh the citation for the rewritten text, then re-check the web in bg.
+      // Refresh the citation for the rewritten text. Web-checking is manual now
+      // (the "Check sources" button) so drafting/tweaking never fires a paid search.
       setProvByDraft((prev) => ({ ...prev, [draft.id]: updated.provenance || [] }));
-      maybeVerify(updated);
     } catch (e) {
       toast(`Couldn't tweak that reply: ${e.message}. Try again.`);
     } finally {
@@ -160,21 +160,13 @@ export default function PostCard({ post, onActioned }) {
     }
   };
 
-  // Auto web-check a freshly produced draft if it has an unverified clinical claim.
-  // Triggered only by generate/tweak (below) — never on passive page loads — so it
-  // runs "in the workflow" without re-checking every time the dashboard opens.
-  const maybeVerify = (draft) => {
-    if (draft && (draft.provenance || []).some((s) => s.level === "unverified")) {
-      handleVerify(draft.id);
-    }
-  };
-
   const handleDraftReply = async () => {
     setDrafting(true);
     try {
-      const drafts = await api.draftReply(post.id);
+      await api.draftReply(post.id);
       onActioned(); // stays in the Queue; the generated options just appear on the card
-      (Array.isArray(drafts) ? drafts : []).forEach(maybeVerify); // auto-verify each option
+      // Web-verification is manual (the "Check sources" button) so generating never
+      // fires a paid web search — the writer checks a claim only when they want to.
     } catch (e) {
       toast(`Couldn't generate a reply: ${e.message}. Try again in a moment.`);
     } finally {
@@ -391,7 +383,11 @@ export default function PostCard({ post, onActioned }) {
               </button>
             </div>
 
-            <ProvenancePanel segments={provByDraft[draft.id] ?? draft.provenance} verifying={verifying === draft.id} />
+            <ProvenancePanel
+              segments={provByDraft[draft.id] ?? draft.provenance}
+              verifying={verifying === draft.id}
+              onVerify={() => handleVerify(draft.id)}
+            />
 
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
               <button
@@ -575,10 +571,12 @@ const Dot = ({ c }) => (
 
 // Clinical-safety trace, briefly: one status line, then only the claims that need
 // a look. Grounded/general points aren't listed — the reassurance is the summary.
-function ProvenancePanel({ segments, verifying }) {
+function ProvenancePanel({ segments, verifying, onVerify }) {
   if (!Array.isArray(segments) || segments.length === 0) return null;
   const flagged = segments.filter((s) => s.level === "unverified" || s.level === "contradicted");
   const grounded = segments.filter((s) => s.level === "grounded").length;
+  // A claim is still "unchecked" until we've run a web search on it.
+  const unchecked = segments.some((s) => s.level === "unverified");
 
   if (flagged.length === 0) {
     return (
@@ -593,6 +591,19 @@ function ProvenancePanel({ segments, verifying }) {
       <div>
         <Dot c="#12b76a" />{grounded} grounded &nbsp;·&nbsp; <Dot c="#f79009" />{flagged.length} to verify
         {verifying && <span style={{ marginLeft: 8, fontStyle: "italic" }}>checking sources…</span>}
+        {!verifying && unchecked && onVerify && (
+          <button
+            onClick={onVerify}
+            title="Run a web search to confirm the flagged claims (uses a paid search — only when you click)"
+            style={{
+              marginLeft: 8, padding: "1px 8px", fontSize: 11, cursor: "pointer",
+              border: "1px solid var(--primary)", borderRadius: 6,
+              background: "transparent", color: "var(--primary)", fontWeight: 600,
+            }}
+          >
+            Check sources
+          </button>
+        )}
       </div>
       {flagged.map((s, i) => {
         const red = s.level === "contradicted";

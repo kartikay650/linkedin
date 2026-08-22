@@ -17,11 +17,6 @@ PROMPT = """Rewrite each of these LinkedIn comment drafts so it reads like a rea
 Keep each one SHORT (1-3 sentences), keep its core point and any specific detail/number/mechanism it cites, and \
 do not add new claims, statistics, or anecdotes.
 
-Match this person's voice:
-\"\"\"
-{voice}
-\"\"\"
-
 Remove these AI tells (from the "signs of AI writing" guide):
 - Em dash as a crutch — use a period or comma like people do. At most one em dash across all drafts.
 - Rule of three ("X, Y, and Z"). Real comments are lopsided, not neatly balanced triplets.
@@ -62,10 +57,19 @@ construction — say the underlying idea a different way or drop it. Nuance mean
 sprinkling hedge words. Keep it SHORT: one or two sentences, roughly 15-25 words, and never longer than the original. \
 No emoji unless the voice explicitly uses them.
 
+Match this person's voice:
+\"\"\"
+{voice}
+\"\"\"
+
 Drafts:
 {drafts}
 
 Respond ONLY with JSON: {{"drafts": ["rewritten one", "rewritten two", ...]}} in the same order and count."""
+
+# The static rule block (everything before the per-client voice) is identical on every
+# call, so we cache it. The variable tail starts at this marker.
+_HUMANIZE_SPLIT = "Match this person's voice:"
 
 
 def humanize_comments(texts: list[str], voice_guide: str) -> list[str]:
@@ -73,15 +77,19 @@ def humanize_comments(texts: list[str], voice_guide: str) -> list[str]:
     if not texts:
         return texts
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
+    full = PROMPT.format(voice=(voice_guide or "").strip() or "Direct, plain, no fluff.", drafts=numbered)
+    idx = full.find(_HUMANIZE_SPLIT)
+    static, variable = full[:idx].rstrip(), full[idx:]
+    content = [
+        {"type": "text", "text": static, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": variable},
+    ]
     try:
         message = _client.with_options(max_retries=1, timeout=40.0).messages.create(
             model=settings.draft_model,
             max_tokens=700,
             extra_body={"thinking": {"type": "disabled"}},  # mechanical rewrite — no thinking, keeps us under 60s
-            messages=[{
-                "role": "user",
-                "content": PROMPT.format(voice=(voice_guide or "").strip() or "Direct, plain, no fluff.", drafts=numbered),
-            }],
+            messages=[{"role": "user", "content": content}],
         )
         data = extract_json(message)
         out = [str(d) for d in data["drafts"] if str(d).strip()]
