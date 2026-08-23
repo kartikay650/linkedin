@@ -127,8 +127,8 @@ _EMOJI_RE = re.compile(
 # (per Lara: e.g. "that explains it almost exactly" is too certain).
 _OVERCERTAIN_RE = re.compile(
     r"\b(almost exactly|exactly explains|explains (it|that|this)[^.]{0,25}exactly|"
-    r"matches[^.]{0,30}exactly|lines up[^.]{0,20}exactly|proven|scientifically proven|"
-    r"definitely|guarantees?|always works|in every case|without a doubt|no question that)\b"
+    r"matches[^.]{0,30}exactly|lines up[^.]{0,20}exactly|proves|proven|scientifically proven|"
+    r"definitely|guarantees?|guaranteed|always works|in every case|without a doubt|no question that)\b"
 )
 
 
