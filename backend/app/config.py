@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str = "https://margins-aoai-4411.openai.azure.com"
     azure_openai_key: str = ""            # resource key — set in Vercel env (secret)
     azure_openai_api_version: str = "2024-12-01-preview"
-    relevance_model: str = "gpt-5-nano"   # cheap, high-volume: relevance + provenance annotate
+    relevance_model: str = "gpt-5-mini"   # relevance scoring + brief + provenance annotate.
+    # (Benchmarked vs the original Claude-Haiku scores: mini corr 0.87 / nano 0.66 — mini correctly
+    #  scores generic filler low; nano let it leak into the queue. Still cheap enough for per-post use.)
     draft_model: str = "gpt-5.6-sol"      # quality: drafting, humanize, brand/voice synthesis
     tavily_api_key: str = ""              # web search for the manual "Check sources" verify pass
 
