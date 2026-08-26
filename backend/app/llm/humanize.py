@@ -6,12 +6,12 @@ Runs as a second pass after draft generation: generate for substance/stance,
 then humanize for how it reads. Falls back to the original text on any failure
 so a draft is never lost.
 """
-import anthropic
+from app.llm._llm import AzureClient
 
 from app.config import settings
 from app.llm.utils import extract_json
 
-_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+_client = AzureClient()
 
 PROMPT = """Rewrite each of these LinkedIn comment drafts so it reads like a real person typed it, not an AI. \
 Keep each one SHORT (1-3 sentences), keep its core point and any specific detail/number/mechanism it cites, and \

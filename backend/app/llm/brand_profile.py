@@ -1,10 +1,10 @@
-import anthropic
+from app.llm._llm import AzureClient
 
 from app.config import settings
 from app.llm.utils import extract_json
 from app.models import Client, ClientDocument
 
-_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+_client = AzureClient()
 
 PROMPT = """You are extracting a structured brand profile for a LinkedIn client from their agency \
 strategy document(s) and any interviews/transcripts provided. This profile drives two things: (1) deciding \

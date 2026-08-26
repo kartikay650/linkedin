@@ -8,3 +8,9 @@ frontend/dist/
 __pycache__/
 *.pyc
 .login-venv/
+.vercel
+.env*
+
+# Supabase CLI local artifacts
+**/supabase/.temp/
+supabase/.temp/

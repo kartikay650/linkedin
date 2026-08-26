@@ -1,10 +1,10 @@
-import anthropic
+from app.llm._llm import AzureClient
 
 from app.config import settings
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
-_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+_client = AzureClient()
 
 PROMPT = """You score whether a LinkedIn post is worth this client commenting on.
 

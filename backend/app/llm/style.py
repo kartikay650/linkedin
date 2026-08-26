@@ -204,6 +204,8 @@ def check_violations(text: str) -> list[str]:
         v.append("nominalized-insight structure")
     if _OVERCERTAIN_RE.search(low):
         v.append("over-certainty (too black-and-white; science should read nuanced)")
+    if re.search(r"\bcurious\b", low):
+        v.append("'curious' — banned over-used tic (opener OR mid-sentence, e.g. 'makes me curious')")
     for opener in _PRAISE_OPENERS:
         if low.startswith(opener):
             v.append(f"praise opener: '{opener}'")

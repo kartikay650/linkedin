@@ -1,10 +1,10 @@
-import anthropic
+from app.llm._llm import AzureClient
 
 from app.config import settings
 from app.llm.utils import extract_json
 from app.models import Client, ClientDocument
 
-_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+_client = AzureClient()
 
 PROMPT = """You're helping build a voice/tone profile for a LinkedIn client based on real source material \
 (interview transcripts, writing samples, bios). This profile will be used to draft LinkedIn comment replies \

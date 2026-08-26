@@ -1,7 +1,7 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-import anthropic
+from app.llm._llm import AzureClient
 
 from app.config import settings
 from app.llm.humanize import humanize_comments
@@ -9,7 +9,7 @@ from app.llm.style import HOUSE_STYLE, check_violations, has_negation_device
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
-_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+_client = AzureClient()
 
 
 def _call(model: str, content, max_tokens: int = 800, timeout: float = 45.0):
@@ -347,21 +347,21 @@ Post by {author}:
 
 
 def _plan(client: Client, post: Post, brief: str, siblings_block: str = "") -> dict:
-    """The reasoning step: decide how THIS post should be answered — including taking a distinct angle
-    from any other profiles that already commented on it. Falls back to an empty plan (drafter then
-    leans on house style) if the call fails."""
-    try:
-        p = extract_json(_call(settings.draft_model,
-            _PLAN_PROMPT.format(name=client.name, brief=(brief or "(no brief available)"),
-                                siblings=(("\n" + siblings_block) if siblings_block else ""),
-                                author=post.author_name, content=post.content_snippet), 700, 45.0))
-    except Exception:
-        p = {}
-    if not isinstance(p, dict):
-        p = {}
-    for k, d in (("read", ""), ("approach", ""), ("core", ""), ("can_add", []), ("avoid", [])):
-        p.setdefault(k, d)
-    return p
+    """Tone directive for the drafter. We deliberately DON'T make a separate reasoning
+    LLM call here: on the current model that step produced cautious, process-y "approach/
+    avoid" scaffolding that flattened drafts toward generic language. Instead we hand the
+    generate step a fixed tone-aware directive and let it judge human-vs-substantive itself;
+    the anti-generic write rules keep it specific, and cross-profile differentiation is still
+    enforced through the memory block (siblings) + the reused-opener gate. Cheaper and faster too."""
+    approach = (
+        "First decide what this post is: a substantive/expert post, or a personal or human "
+        "moment (a milestone, something vulnerable, a photo, a non-medical or off-topic post). "
+        "If it is a human moment, reply warmly and briefly with NO science, data, or biomarkers. "
+        "If it is substantive, engage the single most important point with ONE specific, grounded "
+        "point in this person's own voice and expertise — and a genuinely different angle from any "
+        "other profiles shown in the memory below."
+    )
+    return {"read": "", "approach": approach, "core": "", "can_add": [], "avoid": []}
 
 
 def _rules_block(client: Client) -> str:
@@ -380,7 +380,11 @@ def _rules_block(client: Client) -> str:
 # block 2 = per-client-static (voice, approved examples, rules, feedback, brief); block 3 = the
 # per-draft variable part (plan, memory, the post). Only 1 and 2 are cached.
 _WRITE_RULES = """=== HOW TO WRITE THIS REPLY ===
-Follow the RESPONSE DIRECTIVE given below. If it says stay human: warm, specific to what they said, bring NO science/data/biomarkers. If it says engage the argument: add a grounded point in her voice. ALWAYS short (one or two sentences, MAX 22 words), at most one claim, structurally different from her recent comments, and never the words "tends to" / "seems to". Respond ONLY with JSON: {"drafts": ["your one reply"]}"""
+Follow the RESPONSE DIRECTIVE given below. If it says stay human: warm, specific to what they said, bring NO science/data/biomarkers. If it says engage the argument: add a grounded point in her voice.
+
+BE SPECIFIC AND OWNABLE: say ONE concrete thing about the ACTUAL subject of this post — name the real mechanism, the exact number, the specific population, the precise finding. Take a position only this person, with their expertise, would take. If the comment could sit under ANY post in this niche, rewrite it so it only fits THIS one. BANNED generic filler that makes it sound like anyone: "track it over time", "serial measurements", "careful patient selection", "the confidence it warrants", "broader clinical/health context", "clinical interpretation", "longitudinal follow-up". Never use "curious" or "makes me curious".
+
+ALWAYS short (one or two sentences, MAX 22 words), at most one claim, structurally different from her recent comments, and never the words "tends to" / "seems to". Respond ONLY with JSON: {"drafts": ["your one reply"]}"""
 
 _DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something she typed.
 
@@ -497,30 +501,24 @@ def _tighten(text: str, allow_formula: bool) -> str:
 
 def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid: list[str],
                       voice_ex_block: str, memory_block: str, shape: str) -> str:
-    """One reply: draft to the plan, self-critique against the approach + rule-gate, regenerate once
-    if off, then hard-tighten length/formula."""
+    """Draft once; regenerate once ONLY if it trips a hard house-style/repetition rule.
+
+    The previous approach-critique (_CRIT_PROMPT) + forced length-rewrite (_tighten) were tuned
+    for the old model and flattened the current one into generic, process-y language, so they're
+    dropped. Quality is carried by the anti-generic write rules + the humanizer (run inside
+    generate), and every draft is still gated by check_violations downstream."""
     allow = _prediagnosis(post)
     text = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block, shape)
     if not text:
         return ""
-    try:
-        crit = extract_json(_call(settings.relevance_model, _CRIT_PROMPT.format(approach=plan.get("approach", ""), d=text), 200, 25.0))
-    except Exception:
-        crit = {}
-    if not isinstance(crit, dict):
-        crit = {}
     probs = _hard_problems(text, avoid, allow)
-    too_long = _wc(text) > 26
-    if crit.get("ok") is False or probs or too_long:
-        fix = ("Fix: " + str(crit.get("fix", "")) + ". ") if crit.get("ok") is False else ""
-        if probs:
-            fix += "Also fix: " + "; ".join(probs) + ". "
-        if too_long:
-            fix += "Make it MAX 20 words. "
-        retry = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block, (shape + " " + fix).strip())
+    if probs:
+        fix = "Also fix: " + "; ".join(probs) + ". Keep it specific and in her voice."
+        retry = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block,
+                                      (shape + " " + fix).strip())
         if retry:
             text = retry
-    return _tighten(text, allow)
+    return text
 
 
 def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,

@@ -16,10 +16,10 @@ request (which must stay under Vercel's 60s ceiling):
 import json
 import re
 
-import anthropic
 import httpx
 
 from app.config import settings
+from app.llm._llm import AzureClient
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
@@ -40,7 +40,7 @@ def _json_from_all_text(message) -> dict:
         return json.loads(cleaned[start:end + 1])
     raise ValueError("no parseable JSON object in Claude response")
 
-_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+_client = AzureClient()
 
 
 def _grounding(client: Client, docs_text: str = "") -> str:
@@ -111,7 +111,7 @@ def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str =
         )
         data = extract_json(message)
         segments = list(data["segments"])
-    except (ValueError, KeyError, anthropic.AnthropicError):
+    except Exception:
         # Never block drafting on the safety layer — degrade to "unknown".
         return [{"text": reply, "level": "general", "note": ""}]
     # Guard: only keep well-formed spans.
@@ -130,30 +130,28 @@ def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str =
 
 VERIFY_PROMPT = """You are fact-checking claims in a health expert's LinkedIn comment before it is posted.
 
-For EACH claim you are given candidate studies already retrieved from PubMed (the biomedical literature database). \
-Prefer a PubMed source when one genuinely supports the claim.
-
-Process for each claim, IN ORDER:
-1. Look at its PubMed candidates. Use the web_search tool to check whether a candidate's finding actually supports \
-the claim (search its title / topic; read what it found). If one genuinely does, mark "supported" and cite that \
-study's pubmed.ncbi.nlm.nih.gov URL.
-2. If no PubMed candidate fits (or none were found), search the web and cite the single best reputable source \
-(medical body, peer-reviewed study, established health/science publication).
-You MUST search before deciding — never answer from memory.
+For EACH claim you are given evidence already retrieved for you: candidate studies from PubMed (the biomedical \
+literature database) and web search results (title, URL, snippet). Judge ONLY from the evidence provided below — \
+do not rely on outside memory.
 
 The drafted reply:
 \"\"\"
 {reply}
 \"\"\"
 
-Claims to verify, numbered, each with its PubMed candidates:
+Claims to verify, numbered, each with its evidence:
 {claims}
 
+For each claim, IN ORDER:
+1. Prefer a PubMed source when one genuinely supports the claim; cite its pubmed.ncbi.nlm.nih.gov URL.
+2. Otherwise cite the single best reputable web source from the results (medical body, peer-reviewed study, \
+established health/science publication).
+
 Verdicts:
-- "supported": a reputable source genuinely backs the claim or its underlying mechanism. Prefer a PubMed URL; \
-otherwise the best web source. Only mark supported if the source actually supports THIS claim, not merely a related topic.
-- "contradicted": reputable sources clearly disagree. Include the source URL.
-- "unconfirmed": after actually searching, nothing reputable supports it either way.
+- "supported": a source in the evidence genuinely backs the claim or its underlying mechanism. Only mark \
+supported if the source actually supports THIS claim, not merely a related topic.
+- "contradicted": the evidence clearly disagrees. Include the source URL.
+- "unconfirmed": nothing in the provided evidence supports it either way.
 
 Respond ONLY with JSON, one result per claim IN ORDER:
 {{"results": [{{"verdict": "supported|contradicted|unconfirmed", "source_url": "https://...", "note": "one sentence on what the source says"}}]}}"""
@@ -190,6 +188,35 @@ def _pubmed_candidates(claim: str, retmax: int = 3) -> list[dict]:
         return []
 
 
+def _tavily_search(query: str, max_results: int = 3) -> list[dict]:
+    """Web search via Tavily (built for LLMs; the manual 'Check sources' pass only).
+    Returns [{title, url, content}]. Best-effort: [] if no key or on any failure, so
+    the verifier degrades to 'unconfirmed' rather than breaking the endpoint."""
+    if not settings.tavily_api_key:
+        return []
+    try:
+        r = httpx.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": settings.tavily_api_key,
+                "query": query[:380],
+                "search_depth": "basic",   # fast enough for the serverless window
+                "max_results": max_results,
+            },
+            timeout=12.0,
+        )
+        if r.status_code != 200:
+            print(f"[verify] tavily HTTP {r.status_code}: {r.text[:150]}")
+            return []
+        return [
+            {"title": x.get("title", ""), "url": x.get("url", ""), "content": (x.get("content", "") or "")[:400]}
+            for x in r.json().get("results", [])
+        ]
+    except Exception as ex:
+        print(f"[verify] tavily failed: {ex}")
+        return []
+
+
 def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
     """Web-verify the flagged (red) claims. Explicit, on-demand.
 
@@ -200,16 +227,24 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
     flagged = flagged[:2]  # keep the web pass small enough to finish in the serverless window
     if not flagged:
         return []
-    # PubMed-first: retrieve candidate studies per claim and hand them to the model,
-    # which confirms support via web_search before citing (falls back to a web source).
+    # Retrieve evidence for each claim (PubMed + Tavily web results), then let the model
+    # judge from it in one pass — no live search tool, so it finishes inside the 60s window.
     blocks = []
     for i, c in enumerate(flagged):
+        parts = [f"{i+1}. {c}"]
         cands = _pubmed_candidates(c)
         if cands:
-            lines = "\n".join(f"   - PMID {x['pmid']}: {x['title']} ({x['url']})" for x in cands)
-            blocks.append(f"{i+1}. {c}\n   PubMed candidates:\n{lines}")
+            parts.append("   PubMed candidates:\n" + "\n".join(
+                f"   - PMID {x['pmid']}: {x['title']} ({x['url']})" for x in cands))
         else:
-            blocks.append(f"{i+1}. {c}\n   PubMed candidates: none found — use the web.")
+            parts.append("   PubMed candidates: none found.")
+        web = _tavily_search(c)
+        if web:
+            parts.append("   Web results:\n" + "\n".join(
+                f"   - {x['title']} ({x['url']}): {x['content']}" for x in web))
+        else:
+            parts.append("   Web results: none found.")
+        blocks.append("\n".join(parts))
     claims_block = "\n".join(blocks)
     # Aligned to `flagged` by index — the caller zips this onto the flagged segments,
     # so we never depend on matching the model's reworded claim text.
@@ -227,35 +262,16 @@ def verify_claims(reply: str, flagged: list[str]) -> list[dict]:
             })
         return out
 
-    # Call the web-search tool over raw HTTP: the pinned SDK (0.34.2) can't
-    # deserialize the web_search_tool_result / server_tool_use blocks the response
-    # carries, so going through the SDK raised and always fell back. Raw JSON works
-    # regardless of SDK/model/tool version.
-    body = {
-        "model": settings.draft_model,
-        "max_tokens": 1200,
-        # Basic web search (no dynamic-filtering/code-exec) — much faster, so it
-        # finishes inside the serverless window; 2 searches is enough to cite a claim.
-        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
-        "messages": [{"role": "user", "content": VERIFY_PROMPT.format(reply=reply, claims=claims_block)}],
-    }
-    headers = {
-        "x-api-key": settings.anthropic_api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
+    # One judging pass over the retrieved evidence, via the Azure shim. 45s budget leaves
+    # margin under the 60s function cap so the endpoint always returns (fallback to
+    # 'unconfirmed') rather than being killed at the edge.
     try:
-        # 40s ceiling leaves margin under the 60s function cap so the endpoint
-        # always returns (fallback to 'unconfirmed') rather than being killed at the edge.
-        r = httpx.post("https://api.anthropic.com/v1/messages", json=body, headers=headers, timeout=40.0)
-        if r.status_code != 200:
-            print(f"[verify] web search HTTP {r.status_code}: {r.text[:200]}")
-            return fallback
-        data = r.json()
-        text = "\n".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-        cleaned = _FENCE_RE.sub("", text).strip()
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        parsed = json.loads(cleaned[start:end + 1]) if start != -1 and end > start else {}
+        message = _client.with_options(max_retries=1, timeout=45.0).messages.create(
+            model=settings.draft_model,
+            max_tokens=1200,
+            messages=[{"role": "user", "content": VERIFY_PROMPT.format(reply=reply, claims=claims_block)}],
+        )
+        parsed = _json_from_all_text(message)
         return _align(list(parsed.get("results", [])))
     except Exception as ex:  # network / parse / timeout — never break the endpoint
         print(f"[verify] {type(ex).__name__}: {ex}")

@@ -21,9 +21,16 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""         # public anon key — used to validate user JWTs against Supabase Auth
     supabase_docs_bucket: str = "client-docs"
 
+    # --- LLM: Azure OpenAI (migrated off Anthropic to use the startup credits) ----
+    # draft_model / relevance_model are Azure *deployment names* on the resource below.
+    # anthropic_api_key is retained (unused) so nothing that references it breaks.
     anthropic_api_key: str = ""
-    relevance_model: str = "claude-haiku-4-5-20251001"
-    draft_model: str = "claude-sonnet-5"
+    azure_openai_endpoint: str = "https://margins-aoai-4411.openai.azure.com"
+    azure_openai_key: str = ""            # resource key — set in Vercel env (secret)
+    azure_openai_api_version: str = "2024-12-01-preview"
+    relevance_model: str = "gpt-5-nano"   # cheap, high-volume: relevance + provenance annotate
+    draft_model: str = "gpt-5.6-sol"      # quality: drafting, humanize, brand/voice synthesis
+    tavily_api_key: str = ""              # web search for the manual "Check sources" verify pass
 
     # --- Post fetching provider -------------------------------------------
     # "apify"   → fetch creators' recent posts via an Apify no-cookie actor
