@@ -53,7 +53,8 @@ export const api = {
   updateClient: (clientId, payload) =>
     request(`/clients/${clientId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteClient: (clientId) => request(`/clients/${clientId}`, { method: "DELETE" }),
-  listPosts: (clientId, view = "active") => request(`/clients/${clientId}/posts?view=${encodeURIComponent(view)}`),
+  listPosts: (clientId, view = "active", limit = 60, offset = 0) =>
+    request(`/clients/${clientId}/posts?view=${encodeURIComponent(view)}&limit=${limit}&offset=${offset}`),
   postCounts: (clientId) => request(`/clients/${clientId}/post-counts`),
   notificationsSummary: () => request(`/notifications/summary`),
   updateDraft: (draftId, payload) =>

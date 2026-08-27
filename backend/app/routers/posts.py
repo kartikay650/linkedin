@@ -1,7 +1,8 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload, load_only
+from sqlalchemy import and_, exists, func, or_
+from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
@@ -132,14 +133,70 @@ def _in_view(post, view: str) -> bool:
     return not _has(post, "drafted") and not _has(post, "approved") and not _has(post, "posted")
 
 
+def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
+                 limit: int, offset: int) -> list[Post]:
+    """Egress-lean feed read: apply recency + relevance + the requested VIEW filter in SQL and
+    paginate, so the backend fetches only the page actually shown instead of the client's entire
+    post set (the old path pulled all ~900 rows on every load/tab-switch — the main egress hog).
+    Drafts for the page load via selectinload (one extra IN query — pagination-safe). The count
+    badges keep using the all-rows light path in _visible_posts, so they stay correct and cheap."""
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=max_age_days)
+    dt = func.coalesce(Post.posted_at, Post.fetched_at)
+    working = exists().where(and_(Draft.post_id == Post.id, Draft.status.in_(("pending", "drafted", "approved"))))
+    drafted = exists().where(and_(Draft.post_id == Post.id, Draft.status == "drafted"))
+    approved = exists().where(and_(Draft.post_id == Post.id, Draft.status == "approved"))
+    posted = exists().where(and_(Draft.post_id == Post.id, Draft.status == "posted"))
+
+    q = (
+        db.query(Post)
+        .filter(Post.client_id == client_id, Post.dismissed.is_(False))
+        # fresh enough, OR carrying in-progress work (never hide queued/drafted work by age)
+        .filter(or_(dt >= cutoff, working))
+        # drop 0/10-relevance unless unscored or already being worked
+        .filter(or_(Post.relevance_score.is_(None), func.round(Post.relevance_score * 10) >= 1, working))
+    )
+    if view == "posted":
+        q = q.filter(posted)
+    elif view == "approved":
+        q = q.filter(and_(approved, ~posted))
+    elif view == "draft":
+        q = q.filter(and_(drafted, ~approved, ~posted))
+    elif view == "needs_review":
+        q = q.filter(and_(~approved, ~posted))
+    elif view != "all":  # "active" (the Queue) — the default
+        q = q.filter(and_(~drafted, ~approved, ~posted))
+
+    # newest DAY first, then most-relevant within the day, then newest time (matches _order_key)
+    posts = (
+        q.order_by(func.date(dt).desc(), Post.relevance_score.desc().nullslast(), dt.desc())
+        .options(selectinload(Post.drafts))
+        .offset(max(0, offset))
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+
+    # Hide the client's own / same-company posts (few; slug logic isn't SQL-friendly, so post-filter).
+    client = db.get(Client, client_id)
+    if client:
+        excluded = excluded_author_slugs(db, client)
+        if excluded:
+            posts = [
+                p for p in posts
+                if (profile_slug(p.author_profile_url) or profile_slug(p.source_ref)) not in excluded
+            ]
+    return posts
+
+
 @router.get("/clients/{client_id}/posts", response_model=list[PostWithDrafts])
 def list_posts_for_client(
     client_id: int,
     view: str = Query("active", description="active | needs_review | approved | posted | all"),
     max_age_days: int = Query(14, description="only show posts newer than this many days"),
+    limit: int = Query(60, ge=1, le=200, description="page size"),
+    offset: int = Query(0, ge=0, description="pagination offset"),
     db: Session = Depends(get_db),
 ):
-    return [p for p in _visible_posts(db, client_id, max_age_days) if _in_view(p, view)]
+    return _paged_posts(db, client_id, view, max_age_days, limit, offset)
 
 
 @router.get("/clients/{client_id}/post-counts")

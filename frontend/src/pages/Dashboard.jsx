@@ -17,6 +17,11 @@ export default function Dashboard() {
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Loaded-post count tracked in a ref so a silent reload (after an action) can refetch the
+  // same range without snapping the reviewer back to page 1 — and without churning callback deps.
+  const loadedCountRef = useRef(0);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState(null);
   const [syncError, setSyncError] = useState(null);
@@ -48,17 +53,39 @@ export default function Dashboard() {
     });
   }, [loadClients]);
 
+  // Feed is paginated so a load pulls one page, not the client's whole post set (the main
+  // Supabase-egress fix). A fresh load (view/client change) resets to the first page; a silent
+  // reload (after an action) refetches the range already on screen so nothing jumps.
+  const PAGE = 60;
   const loadPosts = useCallback((silent) => {
     if (!selectedClientId || !POST_VIEWS.includes(view)) return;
     if (!silent) setLoading(true);
+    const limit = silent ? Math.max(PAGE, loadedCountRef.current || PAGE) : PAGE;
     api
-      .listPosts(selectedClientId, view)
-      .then(setPosts)
+      .listPosts(selectedClientId, view, limit, 0)
+      .then((page) => {
+        setPosts(page);
+        loadedCountRef.current = page.length;
+        setHasMore(page.length >= limit);
+      })
       .finally(() => { if (!silent) setLoading(false); });
     // Per-tab counts for the badges — refreshed alongside the list so they stay in sync
     // after any action (draft/approve/post/sync). View-independent, so fetched once here.
     api.postCounts(selectedClientId).then(setCounts).catch(() => {});
   }, [selectedClientId, view]);
+
+  const loadMore = useCallback(() => {
+    if (!selectedClientId || loadingMore) return;
+    setLoadingMore(true);
+    api
+      .listPosts(selectedClientId, view, PAGE, loadedCountRef.current)
+      .then((page) => {
+        setPosts((prev) => [...prev, ...page]);
+        loadedCountRef.current += page.length;
+        setHasMore(page.length >= PAGE);
+      })
+      .finally(() => setLoadingMore(false));
+  }, [selectedClientId, view, loadingMore]);
 
   useEffect(() => {
     loadPosts();
@@ -341,7 +368,24 @@ export default function Dashboard() {
             subtitle="Nothing from the last 14 days yet. Hit Sync all to pull the latest, or check back after the morning sync."
           />
         ) : (
-          posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => { loadPosts(true); loadSummary(); }} />)
+          <>
+            {posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => { loadPosts(true); loadSummary(); }} />)}
+            {hasMore && (
+              <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  style={{
+                    padding: "8px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+                    border: "1px solid var(--border)", borderRadius: 8,
+                    background: "var(--surface)", color: "var(--text)",
+                  }}
+                >
+                  {loadingMore ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {isPostView && usage.length > 0 && (
