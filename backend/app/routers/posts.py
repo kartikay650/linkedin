@@ -8,7 +8,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft, strip_unverifiable
-from app.llm.provenance import annotate_provenance, verify_claims
+from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
 from app.models import Client, ClientDocument, Draft, Post
 from app.profiles import excluded_author_slugs, profile_slug
 from app.scraper.apify_client import account_usage
@@ -21,6 +21,17 @@ router = APIRouter(tags=["posts"])
 # there reads as polite noise. The scorer's own distribution has a natural gap at 4-6, so 4 is a
 # clean cut. Unscored posts and posts already carrying work are always kept.
 MIN_DRAFT_RELEVANCE = 4
+
+
+def _flagged_claims(provenance) -> list[str]:
+    """Claim spans that genuinely need removing. Excludes the 'safety check did not run' marker:
+    that means the checker itself failed, so there is nothing to rewrite — the draft is shown as
+    unverified for a human to look at instead."""
+    return [
+        s["text"] for s in (provenance or [])
+        if s.get("level") == "unverified" and s.get("text")
+        and CHECK_FAILED_NOTE not in (s.get("note") or "")
+    ]
 
 
 def _docs_text(db: Session, client_id: int) -> str:
@@ -344,7 +355,15 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     # used to stop a writer drafting on them anyway — 48% of all drafting went to posts under 4/10,
     # and every comment the reviewer rejected as "not worth my time" came from that band. Refuse
     # server-side so the rule can't be clicked past.
-    if post.relevance_score is not None and round(post.relevance_score * 10) < MIN_DRAFT_RELEVANCE:
+    # Regenerating an EXISTING draft is allowed even below the bar: those drafts were written by the
+    # old pipeline and the team needs to be able to replace a bad one rather than being stuck with it.
+    # The bar only blocks starting NEW work on a post nobody has drafted for.
+    already_drafted = any(d.status != "rejected" for d in post.drafts)
+    if (
+        not already_drafted
+        and post.relevance_score is not None
+        and round(post.relevance_score * 10) < MIN_DRAFT_RELEVANCE
+    ):
         raise HTTPException(
             422,
             f"This post scored {round(post.relevance_score * 10)}/10 for {post.client.name} — below the "
@@ -377,7 +396,7 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     def _safe(text: str):
         """Provenance + the 'nothing to fact-check' enforcement for ONE candidate. No DB access."""
         provenance = annotate_provenance(client, post, text, docs_text)
-        flagged = [s["text"] for s in provenance if s.get("level") == "unverified" and s.get("text")]
+        flagged = _flagged_claims(provenance)
         if flagged:
             safer = strip_unverifiable(client, post, text, flagged)
             if safer and safer != text:
@@ -418,9 +437,20 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
     recent, global_recent, approved, siblings = _draft_context(db, post)
     revised = refine_draft(post.client, post, current, payload.instruction, avoid_texts=recent,
                            voice_examples=approved, global_texts=global_recent, sibling_texts=siblings)
+    docs_text = _docs_text(db, post.client_id)
+    provenance = annotate_provenance(post.client, post, revised, docs_text)
+    # Enforce "nothing to fact-check" on the TWEAK path too. A tweak (especially "more scientific"
+    # / "more authoritative") is a prime way for an unverifiable claim to come back, and previously
+    # this route only re-labelled it and handed it to the reviewer.
+    flagged = _flagged_claims(provenance)
+    if flagged:
+        safer = strip_unverifiable(post.client, post, revised, flagged)
+        if safer and safer != revised:
+            revised = safer
+            provenance = annotate_provenance(post.client, post, revised, docs_text)
     draft.text = revised
     draft.edited_text = None  # revised text supersedes prior manual edits
-    draft.provenance = annotate_provenance(post.client, post, revised, _docs_text(db, post.client_id))
+    draft.provenance = provenance
     db.commit()
     db.refresh(draft)
     return draft

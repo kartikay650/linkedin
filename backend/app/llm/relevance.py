@@ -39,7 +39,9 @@ whether to open it without reading the whole thing. No hype, no adjectives, just
 Respond ONLY with JSON: {{"score": float, "reason": "one sentence", "summary": "one sentence"}}"""
 
 
-def score_post(client: Client, post: Post) -> tuple[float, str, str]:
+def score_post(client: Client, post: Post) -> tuple[float | None, str, str]:
+    """Score 0.0-1.0, or None when scoring failed (leaves the post unscored rather than
+    mislabelling it as irrelevant)."""
     message = _client.messages.create(
         model=settings.relevance_model,
         max_tokens=200,
@@ -61,4 +63,8 @@ def score_post(client: Client, post: Post) -> tuple[float, str, str]:
         data = extract_json(message)
         return float(data["score"]), str(data["reason"]), str(data.get("summary", ""))
     except (ValueError, KeyError):
-        return 0.0, "relevance scoring failed to parse a response", ""
+        # Return None, NOT 0.0. A transient API/parse error used to score the post 0 — which now
+        # means "junk": hidden from the feed, refused for drafting, and swept by the archive pass.
+        # A good post was permanently buried by a blip. Unscored posts stay visible and can be
+        # re-scored instead.
+        return None, "relevance scoring failed — not scored yet", ""

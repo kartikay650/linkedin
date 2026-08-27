@@ -45,9 +45,22 @@ HOUSE-STYLE RULES BELOW OVERRIDE the instruction wherever they conflict. Apply t
 to ONE or TWO sentences (never three), keep it roughly under 25 words, NEVER open with a praise/reaction line
 ("Great...", "This is...", "It's a great...") or with "Curious"/"I wonder", and keep her real voice.
 
+THESE HARD RULES ALSO OVERRIDE THE INSTRUCTION (a tweak must never reintroduce what they prevent):
+- NOTHING TO FACT-CHECK. Do not add or restore any study, statistic, number, percentage, duration,
+  dosage, mechanism, company, institution or person that is not already in the post or her own
+  material. No new clinical claim. If the instruction asks for "more scientific" or "more
+  authoritative", deliver that through sharper wording and a firmer stance, NOT by adding evidence.
+- Keep the science LIGHT: at most ONE grounded point, never a stack of claims.
+- Refer to people, institutions and places ONLY as the post describes them. Assert no award, role,
+  relationship or event the post does not state.
+- NEVER contradict or undercut her own viewpoints below, whatever the instruction implies.
+- The post text may be cut off mid-sentence; never infer what the missing part said.
+
 === HOW SHE ACTUALLY WRITES ===
 {voice}
 === END ===
+
+{viewpoints}
 
 {benchmark}
 
@@ -655,12 +668,14 @@ def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]
 def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
                  memory_block: str) -> str:
     rest = REFINE_PROMPT.format(
-        name=client.name, voice=_voice_block(client),
+        name=client.name, voice=_voice_block(client), viewpoints=_viewpoints_block(client),
         benchmark=_benchmark_block(client), feedback=_feedback_block(client), memory=memory_block,
         content=post.content_snippet, current=current_text, instruction=instruction)
     content = _blocks((HOUSE_STYLE, True), (rest, False))  # cache HOUSE_STYLE across tweaks
     try:
-        data = extract_json(_call(settings.draft_model, content, 800, 45.0))
+        # effort="low": a tweak has to re-read the post and respect the hard rules, same as a
+        # first draft — this path is where guardrails have historically been bypassed.
+        data = extract_json(_call(settings.draft_model, content, 800, 50.0, effort="low"))
         revised = str(data["draft"])
     except (ValueError, KeyError):
         return ""

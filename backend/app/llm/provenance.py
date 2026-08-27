@@ -25,6 +25,11 @@ from app.models import Client, Post
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
+# Marker used when the safety pass itself failed (timeout / parse error) rather than finding a
+# real claim. Surfaced to the reviewer as unverified (fail closed), but callers must NOT try to
+# "fix" the draft off it — there is nothing to fix, the check simply did not run.
+CHECK_FAILED_NOTE = "safety check did not run — please verify this manually before posting"
+
 
 def _json_from_all_text(message) -> dict:
     """Web-search responses interleave narration and tool-result blocks; the
@@ -114,8 +119,13 @@ def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str =
         data = extract_json(message)
         segments = list(data["segments"])
     except Exception:
-        # Never block drafting on the safety layer — degrade to "unknown".
-        return [{"text": reply, "level": "general", "note": ""}]
+        # FAIL CLOSED. This used to return level "general", which the UI renders as
+        # "Grounded in her material. Nothing to verify." — so a timeout or parse error silently
+        # turned the clinical-safety check OFF and reported success on a draft nobody had checked.
+        # Now a failed check reads as unverified, so it looks suspicious rather than clean.
+        # `CHECK_FAILED_NOTE` lets the draft route tell "we couldn't check" apart from "we found a
+        # claim", so it never rewrites a draft on the basis of a check that never ran.
+        return [{"text": reply, "level": "unverified", "note": CHECK_FAILED_NOTE, "source_url": ""}]
     # Guard: only keep well-formed spans.
     out = []
     for s in segments:
