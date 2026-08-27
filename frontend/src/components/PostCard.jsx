@@ -168,7 +168,10 @@ export default function PostCard({ post, onActioned }) {
       // Web-verification is manual (the "Check sources" button) so generating never
       // fires a paid web search — the writer checks a claim only when they want to.
     } catch (e) {
-      toast(`Couldn't generate a reply: ${e.message}. Try again in a moment.`);
+      // A low-relevance post is refused on purpose (422) — show the reason as-is rather than
+      // telling the writer to retry something that will always be refused.
+      const deliberate = /below the .*bar|scored \d+\/10/i.test(e.message || "");
+      toast(deliberate ? e.message : `Couldn't generate a reply: ${e.message}. Try again in a moment.`);
     } finally {
       setDrafting(false);
     }

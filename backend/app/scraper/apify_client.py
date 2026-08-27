@@ -261,7 +261,12 @@ def _normalise(item: dict) -> dict | None:
         "author_name": author_name,
         "author_profile_url": author_url or "",
         "post_url": post_url,
-        "content_snippet": (text or "")[:600],
+        # Keep the WHOLE post (up to a sane ceiling). This used to cut at 600 chars, which
+        # amputated ~70% of posts mid-sentence — the relevance scorer and the drafter never saw
+        # the full argument, which is the root cause of drafts that misread or contradicted a
+        # post. 2500 covers virtually every LinkedIn post; the feed is paginated so the extra
+        # text costs little egress.
+        "content_snippet": (text or "")[:2500],
         "posted_at": _parse_dt(posted),
         "engagement": engagement,
     }

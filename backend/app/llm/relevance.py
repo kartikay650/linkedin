@@ -43,6 +43,8 @@ def score_post(client: Client, post: Post) -> tuple[float, str, str]:
     message = _client.messages.create(
         model=settings.relevance_model,
         max_tokens=200,
+        # Judgement call (does this client have anything real to add?) — give it a reasoning pass.
+        effort="low",
         messages=[{
             "role": "user",
             "content": PROMPT.format(

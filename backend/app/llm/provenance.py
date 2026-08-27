@@ -100,6 +100,8 @@ def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str =
             # default to thinking, so no thinking flag needed.
             model=settings.relevance_model,
             max_tokens=1500,
+            # Deciding what counts as an unverifiable claim is a judgement call — reason about it.
+            effort="low",
             messages=[{
                 "role": "user",
                 "content": PROVENANCE_PROMPT.format(

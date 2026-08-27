@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
-from app.llm.draft import generate_drafts, refine_draft
+from app.llm.draft import generate_drafts, refine_draft, strip_unverifiable
 from app.llm.provenance import annotate_provenance, verify_claims
 from app.models import Client, ClientDocument, Draft, Post
 from app.profiles import excluded_author_slugs, profile_slug
@@ -14,6 +15,12 @@ from app.scraper.apify_client import account_usage
 from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
 
 router = APIRouter(tags=["posts"])
+
+# Relevance floor (out of 10). Posts scoring below this are hidden from the feed and refused by the
+# draft route: the scorer reliably marks them as posts the client can add nothing to, and commenting
+# there reads as polite noise. The scorer's own distribution has a natural gap at 4-6, so 4 is a
+# clean cut. Unscored posts and posts already carrying work are always kept.
+MIN_DRAFT_RELEVANCE = 4
 
 
 def _docs_text(db: Session, client_id: int) -> str:
@@ -87,13 +94,13 @@ def _visible_posts(db: Session, client_id: int, max_age_days: int, light: bool =
                 if (profile_slug(p.author_profile_url) or profile_slug(p.source_ref)) not in excluded
             ]
 
-    # Drop 0/10-relevance posts from EVERY view — they only clutter the queue. Keep a post if
-    # it's unscored (scoring may still be pending) or already has in-progress work. These are
-    # filtered, not deleted, so the threshold can be relaxed later if the scorer ever zeroes a
-    # genuinely good post.
+    # Drop low-relevance posts from EVERY view — they only clutter the queue, and drafting on them
+    # produced the comments the reviewer called "not worth my time". Keep a post if it's unscored
+    # (scoring may still be pending) or already has in-progress work. Filtered, not deleted, so the
+    # threshold can be relaxed if the scorer ever under-rates a genuinely good post.
     def too_irrelevant(post):
         s = post.relevance_score
-        return s is not None and round(s * 10) < 1 and not has_working_draft(post)
+        return s is not None and round(s * 10) < MIN_DRAFT_RELEVANCE and not has_working_draft(post)
 
     posts = [p for p in posts if not too_irrelevant(p)]
 
@@ -153,7 +160,8 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
         # fresh enough, OR carrying in-progress work (never hide queued/drafted work by age)
         .filter(or_(dt >= cutoff, working))
         # drop 0/10-relevance unless unscored or already being worked
-        .filter(or_(Post.relevance_score.is_(None), func.round(Post.relevance_score * 10) >= 1, working))
+        .filter(or_(Post.relevance_score.is_(None),
+                    func.round(Post.relevance_score * 10) >= MIN_DRAFT_RELEVANCE, working))
     )
     if view == "posted":
         q = q.filter(posted)
@@ -332,6 +340,18 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     if not post:
         raise HTTPException(404, "post not found")
 
+    # Relevance gate. The scorer already identifies posts a client can add nothing to, but nothing
+    # used to stop a writer drafting on them anyway — 48% of all drafting went to posts under 4/10,
+    # and every comment the reviewer rejected as "not worth my time" came from that band. Refuse
+    # server-side so the rule can't be clicked past.
+    if post.relevance_score is not None and round(post.relevance_score * 10) < MIN_DRAFT_RELEVANCE:
+        raise HTTPException(
+            422,
+            f"This post scored {round(post.relevance_score * 10)}/10 for {post.client.name} — below the "
+            f"{MIN_DRAFT_RELEVANCE}/10 bar, so a comment would be polite noise rather than value. "
+            "Skip it, or raise its relevance if the score looks wrong.",
+        )
+
     recent, global_recent, approved, siblings = _draft_context(db, post)
 
     # Two DIVERSE candidates so the reviewer picks the angle they like (acting on one
@@ -348,9 +368,33 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     db.flush()
 
     docs_text = _docs_text(db, post.client_id)
+    client = post.client
+    # Force-load the attributes the safety pass reads, so the worker threads below never trigger a
+    # lazy DB load off the session (SQLAlchemy sessions are not thread-safe).
+    _ = (client.name, client.voice_samples, client.viewpoints, client.key_messages,
+         client.guardrails, post.content_snippet)
+
+    def _safe(text: str):
+        """Provenance + the 'nothing to fact-check' enforcement for ONE candidate. No DB access."""
+        provenance = annotate_provenance(client, post, text, docs_text)
+        flagged = [s["text"] for s in provenance if s.get("level") == "unverified" and s.get("text")]
+        if flagged:
+            safer = strip_unverifiable(client, post, text, flagged)
+            if safer and safer != text:
+                text = safer
+                provenance = annotate_provenance(client, post, text, docs_text)
+        return text, provenance
+
+    # Run the candidates' safety passes CONCURRENTLY: serially they made a two-candidate draft
+    # ~60s (the serverless ceiling); in parallel the cost is the slowest one, not the sum.
+    try:
+        with ThreadPoolExecutor(max_workers=min(len(texts), 3)) as ex:
+            results = list(ex.map(_safe, texts))
+    except Exception:
+        results = [_safe(t) for t in texts]
+
     created = []
-    for i, text in enumerate(texts):
-        provenance = annotate_provenance(post.client, post, text, docs_text)
+    for i, (text, provenance) in enumerate(results):
         draft = Draft(post_id=post.id, variant_index=i, text=text, provenance=provenance)
         db.add(draft)
         created.append(draft)

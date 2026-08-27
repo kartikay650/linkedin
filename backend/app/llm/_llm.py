@@ -44,7 +44,8 @@ class _Messages:
     def __init__(self, timeout):
         self._timeout = timeout
 
-    def create(self, model=None, max_tokens=800, messages=None, extra_body=None, **kw):
+    def create(self, model=None, max_tokens=800, messages=None, extra_body=None,
+               effort=None, **kw):
         text = _flatten(messages[0]["content"])
         url = (
             f"{settings.azure_openai_endpoint}/openai/deployments/{model}"
@@ -53,16 +54,22 @@ class _Messages:
         headers = {"Content-Type": "application/json", "api-key": settings.azure_openai_key}
         body = {
             "messages": [{"role": "user", "content": text}],
-            # reasoning tokens count toward completion; +600 headroom so JSON replies
-            # are never truncated. reasoning_effort "none" = baseline latency (fits 60s).
-            "max_completion_tokens": (max_tokens or 800) + 600,
-            "reasoning_effort": "none",
+            # reasoning tokens count toward completion; +900 headroom so a thinking pass can't
+            # squeeze out the JSON reply.
+            "max_completion_tokens": (max_tokens or 800) + 900,
+            # Steps that need JUDGEMENT (drafting, relevance, provenance) pass effort="low" so the
+            # model actually deliberates before writing — measured at only ~+1.2s per call, and it
+            # is what stops misreads / invented entities / stance errors. Mechanical steps
+            # (humanize, tighten, JSON reshaping) stay "none" for speed.
+            "reasoning_effort": effort or "none",
         }
         return _Message(self._post(url, headers, body))
 
     def _post(self, url, headers, body):
+        # Keep the retry budget SMALL: this runs inside a 60s serverless request, and a long
+        # retry ladder is what pushes a draft over the edge. 3 attempts with short backoff.
         last = ""
-        for attempt in range(4):
+        for attempt in range(3):
             try:
                 r = httpx.post(url, json=body, headers=headers, timeout=self._timeout)
                 if r.status_code == 200:
@@ -75,14 +82,14 @@ class _Messages:
                     body = {k: v for k, v in body.items() if k != "reasoning_effort"}
                     continue
                 if r.status_code in (429, 500, 502, 503):
-                    time.sleep(1.5 * (attempt + 1))
+                    time.sleep(0.8 * (attempt + 1))
                     last = msg
                     continue
                 print(f"[llm] HTTP {r.status_code}: {msg}")
                 return ""
-            except Exception as ex:  # network / timeout — retry a couple times, then give up
+            except Exception as ex:  # network / timeout — one quick retry, then give up
                 last = f"{type(ex).__name__}: {ex}"
-                time.sleep(1)
+                time.sleep(0.5)
                 continue
         print(f"[llm] gave up after retries: {last}")
         return ""

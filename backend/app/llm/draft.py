@@ -12,12 +12,13 @@ from app.models import Client, Post
 _client = AzureClient()
 
 
-def _call(model: str, content, max_tokens: int = 800, timeout: float = 45.0):
-    """One thinking-disabled message call (pinned SDK). `content` is either a plain string or a
-    list of content blocks (used for prompt caching — see _blocks). Used by every step of the
-    reasoning drafter — brief, plan, draft, critique, tighten."""
+def _call(model: str, content, max_tokens: int = 800, timeout: float = 45.0,
+          effort: str | None = None):
+    """One message call. `content` is either a plain string or a list of content blocks.
+    `effort="low"` turns ON the model's reasoning pass for steps that need judgement (writing
+    the draft); leave it None for mechanical steps. Used by every step of the drafter."""
     return _client.with_options(max_retries=1, timeout=timeout).messages.create(
-        model=model, max_tokens=max_tokens, extra_body={"thinking": {"type": "disabled"}},
+        model=model, max_tokens=max_tokens, effort=effort,
         messages=[{"role": "user", "content": content}],
     )
 
@@ -382,9 +383,35 @@ def _rules_block(client: Client) -> str:
 _WRITE_RULES = """=== HOW TO WRITE THIS REPLY ===
 Follow the RESPONSE DIRECTIVE given below. If it says stay human: warm, specific to what they said, bring NO science/data/biomarkers. If it says engage the argument: add a grounded point in her voice.
 
-BE SPECIFIC AND OWNABLE: say ONE concrete thing about the ACTUAL subject of this post — name the real mechanism, the exact number, the specific population, the precise finding. Take a position only this person, with their expertise, would take. If the comment could sit under ANY post in this niche, rewrite it so it only fits THIS one. BANNED generic filler that makes it sound like anyone: "track it over time", "serial measurements", "careful patient selection", "the confidence it warrants", "broader clinical/health context", "clinical interpretation", "longitudinal follow-up". Never use "curious" or "makes me curious".
+NOTHING TO FACT-CHECK (hard rule, overrides everything else). No one on the team is a scientist who can
+verify claims, so a comment that needs checking is unusable. Therefore:
+- State ONLY what is already in the post, or what is in this person's own material below.
+- NEVER introduce a study, statistic, number, percentage, duration, dosage, mechanism, company,
+  institution, product or person that is not already in the post or her material.
+- No new clinical/statistical claim of your own. If your point needs evidence to stand up, cut it and
+  make a plainer observation instead.
+- Keep the science LIGHT: at most ONE grounded point. Do not stack claims. Over-claiming and
+  claim-density damage the client's credibility more than a simple comment ever would.
 
-ALWAYS short (one or two sentences, MAX 22 words), at most one claim, structurally different from her recent comments, and never the words "tends to" / "seems to". Respond ONLY with JSON: {"drafts": ["your one reply"]}"""
+GET THE POST RIGHT.
+- Read what the post actually says before writing. React to its real subject, not the hook.
+- The post text may be cut off mid-sentence. If so, only react to what is clearly stated; never
+  infer, complete, or guess what the missing part said.
+- Refer to people, institutions, universities, companies and places ONLY as the post itself
+  describes them. Do not assert any award, role, relationship, affiliation or event that the post
+  does not state. If you are not certain who or what something is, do not name it.
+
+NEVER CONTRADICT THIS PERSON'S OWN VIEWPOINTS (given below). Do not argue the opposite of their
+stated philosophy, and do not undercut a position they hold. If the post's topic sits outside their
+stated views, stay warm and reactive instead of taking a stance.
+
+BE SPECIFIC TO THIS POST: pick ONE concrete thing the post actually says and respond to that, so the
+comment could not sit under any other post. BANNED generic filler: "track it over time", "serial
+measurements", "careful patient selection", "the confidence it warrants", "broader clinical/health
+context", "clinical interpretation", "longitudinal follow-up". Never use "curious" or "makes me curious".
+
+ALWAYS short (one or two sentences, MAX 22 words), structurally different from her recent comments, and
+never the words "tends to" / "seems to". Respond ONLY with JSON: {"drafts": ["your one reply"]}"""
 
 _DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something she typed.
 
@@ -394,6 +421,8 @@ _DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must
 
 {voice_examples}
 
+{viewpoints}
+
 {rules}
 
 {feedback}
@@ -401,6 +430,20 @@ _DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must
 === WHAT SHE ACTUALLY KNOWS (ground any substance ONLY in this — never invent) ===
 {brief}
 === END ==="""
+
+
+def _viewpoints_block(client: Client) -> str:
+    """The client's OWN stances, verbatim. Passed raw (not only via the summarised brief) because
+    the drafter must never argue against them — a draft that contradicts the client's philosophy
+    reads as off-brand even when every fact in it is safe."""
+    v = (getattr(client, "viewpoints", "") or "").strip()
+    if not v:
+        return ""
+    return (
+        "=== HER OWN VIEWPOINTS / PHILOSOPHY (never contradict or undercut these) ===\n"
+        + v[:2000]
+        + "\n=== END ==="
+    )
 
 _DRAFT_VARIABLE = """=== HOW TO RESPOND HERE (follow this exactly) ===
 {approach}
@@ -423,6 +466,7 @@ def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
     g_static = HOUSE_STYLE + "\n\n" + _WRITE_RULES
     c_static = _DRAFT_CLIENT.format(
         name=client.name, voice=_voice_block(client), voice_examples=voice_ex_block,
+        viewpoints=_viewpoints_block(client),
         rules=_rules_block(client), feedback=_feedback_block(client), brief=(brief or "(none)"),
     )
     variable = _DRAFT_VARIABLE.format(
@@ -433,7 +477,9 @@ def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
     )
     content = _blocks((g_static, True), (c_static, True), (variable, False))
     try:
-        drafts = [str(d) for d in extract_json(_call(settings.draft_model, content, 800, 45.0))["drafts"] if str(d).strip()]
+        # effort="low": the model reasons about the post before writing. This is the step where
+        # comprehension, stance and entity accuracy are won or lost, so it gets the thinking pass.
+        drafts = [str(d) for d in extract_json(_call(settings.draft_model, content, 800, 50.0, effort="low"))["drafts"] if str(d).strip()]
     except (ValueError, KeyError):
         return ""
     drafts = humanize_comments(drafts, _voice_block(client))
@@ -560,6 +606,50 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
         if t and t not in out:
             out.append(t)
     return out
+
+
+_DECLAIM_PROMPT = """This LinkedIn comment, written as {name}, contains a claim that would need
+fact-checking before it could be posted. No one on the team can verify claims, so the comment must be
+rewritten until there is NOTHING left to check.
+
+Comment: "{text}"
+
+The unverifiable part(s): {flagged}
+
+Rewrite it so it makes a plainer, safe observation instead — keep her voice and keep it about the same
+post, but remove the claim entirely rather than softening it. Do not introduce any new fact, number,
+study, mechanism, company, institution or person. Prefer her perspective or a simple human reaction
+over anything that asserts evidence. One or two sentences, MAX 22 words.
+
+The post being replied to:
+\"\"\"{content}\"\"\"
+
+Respond ONLY with JSON: {{"text": "..."}}"""
+
+
+def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]) -> str:
+    """Rewrite a draft to remove claims the provenance pass flagged as `unverified`.
+
+    Lara's standing rule is that a comment needing fact-checking is unusable — the team has no
+    scientist to verify it. Provenance previously only LABELLED such claims, so they still reached
+    her review queue; this makes the rule structural. Called by the draft route only when a flag
+    actually fires, so it costs nothing on clean drafts. Returns the original on any failure."""
+    if not text or not flagged:
+        return text
+    try:
+        out = str(extract_json(_call(
+            settings.draft_model,
+            _DECLAIM_PROMPT.format(name=client.name, text=text,
+                                   flagged="; ".join(f'"{f}"' for f in flagged[:3]),
+                                   content=(post.content_snippet or "")[:1200]),
+            400, 40.0, effort="low",
+        )).get("text", "")).strip()
+    except Exception:
+        return text
+    if not out:
+        return text
+    out = humanize_comments([out], _voice_block(client))[0]
+    return _strip_negation(out) or text
 
 
 def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
