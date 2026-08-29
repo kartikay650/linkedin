@@ -202,25 +202,26 @@ def notifications_summary(
     for client in db.query(Client).order_by(Client.name).all():
         conds = _visible_conditions(db, client.id, max_age_days)
         for key, (view, status) in STAGE.items():
-            # oldest created_at among the drafts of THIS status on posts in this view
-            oldest_sq = (
-                db.query(func.min(Draft.created_at))
-                .join(Post, Post.id == Draft.post_id)
-                .filter(Draft.status == status, *conds, _VIEW_SQL[view])
-                .scalar_subquery()
-            )
-            row = db.query(
-                func.count().label("n"), oldest_sq.label("oldest")
-            ).select_from(Post).filter(*conds, _VIEW_SQL[view]).one()
-            if not row.n:
+            # Two scalar aggregates. Deliberately NOT one joined query: the view predicates are
+            # EXISTS subqueries over drafts, so joining drafts into the outer query makes
+            # SQLAlchemy correlate both tables away and emit an invalid statement. Selecting the
+            # matching post ids first keeps each statement simple and valid.
+            n = db.query(func.count()).select_from(Post).filter(*conds, _VIEW_SQL[view]).scalar()
+            if not n:
                 continue
+            ids = db.query(Post.id).filter(*conds, _VIEW_SQL[view]).scalar_subquery()
+            oldest = (
+                db.query(func.min(Draft.created_at))
+                .filter(Draft.status == status, Draft.post_id.in_(ids))
+                .scalar()
+            )
             oh = None
-            if row.oldest:
-                ts = row.oldest if row.oldest.tzinfo else row.oldest.replace(tzinfo=timezone.utc)
+            if oldest:
+                ts = oldest if oldest.tzinfo else oldest.replace(tzinfo=timezone.utc)
                 oh = round((now - ts).total_seconds() / 3600, 1)
-            result[key]["total"] += row.n
+            result[key]["total"] += n
             result[key]["by_client"].append(
-                {"id": client.id, "name": client.name, "count": row.n, "oldest_hours": oh}
+                {"id": client.id, "name": client.name, "count": n, "oldest_hours": oh}
             )
             if oh is not None and (result[key]["oldest_hours"] is None or oh > result[key]["oldest_hours"]):
                 result[key]["oldest_hours"] = oh
