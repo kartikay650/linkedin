@@ -97,6 +97,36 @@ export default function Dashboard() {
     api.notificationsSummary().then(setSummary).catch(() => {});
   }, []);
 
+  // What happens after an action on a card. Refetching the whole page for every click was the
+  // biggest remaining Supabase egress cost (~90kB a page, on every approve/edit/generate), so
+  // each action now updates just the affected card and refreshes the badges, which are cheap
+  // SQL aggregates. Only cases that genuinely change which tab a post belongs to fall back to
+  // a reload.
+  const onPostActioned = useCallback((postId, kind, payload) => {
+    const refreshBadges = () => {
+      if (selectedClientId) api.postCounts(selectedClientId).then(setCounts).catch(() => {});
+      loadSummary();
+    };
+    if (kind === "edit") {
+      return; // text-only: the card already shows it, nothing to refresh
+    }
+    if (kind === "removed" && view !== "all") {
+      // approved / posted / rejected / moved / dismissed -> leaves this tab
+      setPosts((prev) => prev.filter((p) => p.id !== postId));
+      loadedCountRef.current = Math.max(0, loadedCountRef.current - 1);
+      refreshBadges();
+      return;
+    }
+    if (kind === "drafts" && Array.isArray(payload)) {
+      // newly generated options come back from the API — no need to re-download the page
+      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, drafts: payload } : p)));
+      refreshBadges();
+      return;
+    }
+    loadPosts(true); // anything else (e.g. removing one option) — full refresh
+    loadSummary();
+  }, [selectedClientId, view, loadPosts, loadSummary]);
+
   // Poll every 5 min and ONLY when the tab is actually visible (most open dashboards sit in a
   // background tab). Refresh immediately when the tab regains focus so it still feels current.
   // This, with the light-column summary read, is the main egress fix.
@@ -369,7 +399,9 @@ export default function Dashboard() {
           />
         ) : (
           <>
-            {posts.map((post) => <PostCard key={post.id} post={post} onActioned={() => { loadPosts(true); loadSummary(); }} />)}
+            {posts.map((post) => (
+              <PostCard key={post.id} post={post} onActioned={(kind, payload) => onPostActioned(post.id, kind, payload)} />
+            ))}
             {hasMore && (
               <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
                 <button

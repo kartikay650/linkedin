@@ -132,6 +132,20 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
         body = p.content_snippet or ""
         if len(body) > _LIST_PREVIEW_CHARS:
             p.content_snippet = body[:_LIST_PREVIEW_CHARS].rstrip() + "…"
+        # Slim the provenance trace the same way. The card only renders a count of grounded
+        # spans plus the flagged ones (short quote + source link) — the full text and the
+        # per-span notes of every grounded span are downloaded and never shown. Single-draft
+        # responses (refine, verify-claims) still return the complete trace.
+        for d in p.drafts:
+            segs = d.provenance if isinstance(d.provenance, list) else []
+            d.provenance = [
+                {"level": s.get("level"),
+                 "text": (s.get("text") or "")[:70],
+                 "source_url": s.get("source_url", "")}
+                if s.get("level") in ("unverified", "contradicted")
+                else {"level": s.get("level")}
+                for s in segs if isinstance(s, dict)
+            ]
     return posts
 
 

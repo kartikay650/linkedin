@@ -84,7 +84,9 @@ export default function PostCard({ post, onActioned }) {
   const handleStatus = async (draft, status) => {
     try {
       await api.updateDraft(draft.id, { status, edited_text: editedText[draft.id] });
-      onActioned();
+      // Changing status moves the post out of the tab you're looking at, so the card is
+      // dropped locally instead of refetching the whole page (see onActioned in Dashboard).
+      onActioned("removed");
     } catch (e) {
       toast(`Couldn't save that: ${e.message}. Try again.`);
     }
@@ -100,7 +102,8 @@ export default function PostCard({ post, onActioned }) {
       await api.updateDraft(draft.id, { edited_text: text });
       setSavedId(draft.id);
       setTimeout(() => setSavedId((cur) => (cur === draft.id ? null : cur)), 1600);
-      onActioned();
+      // Text-only change: the textarea already shows it, so nothing needs refetching.
+      onActioned("edit");
     } catch (e) {
       toast(`Couldn't save your edit: ${e.message}. Try again.`);
     }
@@ -129,7 +132,7 @@ export default function PostCard({ post, onActioned }) {
   const handleRemoveOption = async (draft) => {
     try {
       await api.deleteDraft(draft.id);
-      onActioned();
+      onActioned();  // may change which tab the post belongs to -> full refresh
     } catch (e) {
       toast(`Couldn't remove that option: ${e.message}. Try again.`);
     }
@@ -139,7 +142,7 @@ export default function PostCard({ post, onActioned }) {
     setDismissing(true);
     try {
       await api.dismissPost(post.id);
-      onActioned();
+      onActioned("removed");
     } catch (e) {
       toast(`Couldn't dismiss that post: ${e.message}. Try again.`);
       setDismissing(false);
@@ -163,8 +166,10 @@ export default function PostCard({ post, onActioned }) {
   const handleDraftReply = async () => {
     setDrafting(true);
     try {
-      await api.draftReply(post.id);
-      onActioned(); // stays in the Queue; the generated options just appear on the card
+      const drafts = await api.draftReply(post.id);
+      // draftReply returns the created drafts, so the card can show them directly — the post
+      // stays in the Queue and refetching the whole page would just re-download it.
+      onActioned("drafts", drafts);
       // Web-verification is manual (the "Check sources" button) so generating never
       // fires a paid web search — the writer checks a claim only when they want to.
     } catch (e) {
