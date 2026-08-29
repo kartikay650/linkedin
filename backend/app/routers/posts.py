@@ -3,14 +3,14 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, exists, func, or_
-from sqlalchemy.orm import Session, joinedload, load_only, selectinload
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft, strip_unverifiable
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
 from app.models import Client, ClientDocument, Draft, Post
-from app.profiles import excluded_author_slugs, profile_slug
+from app.profiles import excluded_author_slugs
 from app.scraper.apify_client import account_usage
 from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
 
@@ -21,6 +21,10 @@ router = APIRouter(tags=["posts"])
 # there reads as polite noise. The scorer's own distribution has a natural gap at 4-6, so 4 is a
 # clean cut. Unscored posts and posts already carrying work are always kept.
 MIN_DRAFT_RELEVANCE = 4
+
+# How much of a post body the feed ships per card. The card shows a gist under the one-line
+# summary; the full text (now up to 2500 chars, for the drafter) never needs to reach the browser.
+_LIST_PREVIEW_CHARS = 450
 
 
 def _flagged_claims(provenance) -> list[str]:
@@ -45,110 +49,49 @@ def _docs_text(db: Session, client_id: int) -> str:
     return "\n\n".join((d.extracted_text or "") for d in docs)
 
 
-def _visible_posts(db: Session, client_id: int, max_age_days: int, light: bool = False) -> list[Post]:
-    """The client's base feed BEFORE the per-tab filter: not dismissed, fresh enough (or
-    carrying in-progress work), with the client's own and same-company colleagues' posts
-    removed. Shared source of truth for both the post list and the per-tab counts, so the
-    tab badges can never disagree with what a tab actually shows.
+# Draft-status existence tests, reused by the feed query AND the count aggregates so a badge can
+# never disagree with the tab it labels.
+_WORKING = exists().where(and_(Draft.post_id == Post.id, Draft.status.in_(("pending", "drafted", "approved"))))
+_DRAFTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "drafted"))
+_APPROVED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "approved"))
+_POSTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "posted"))
 
-    `light=True` fetches ONLY the columns the filtering/counting logic actually touches
-    (timestamps, relevance, author, dismissed, and each draft's status/created_at) and NOT the
-    heavy fields (content_snippet, draft text/edited_text, provenance JSON). Same rows, same
-    logic, a fraction of the bytes — used by the count badges and the notification summary so
-    they stop reading megabytes just to produce a few numbers (the main egress fix)."""
-    if light:
-        query = (
-            db.query(Post)
-            .options(
-                load_only(Post.id, Post.client_id, Post.posted_at, Post.fetched_at,
-                          Post.relevance_score, Post.dismissed, Post.author_profile_url, Post.source_ref),
-                joinedload(Post.drafts).load_only(Draft.status, Draft.created_at),
-            )
-        )
-    else:
-        query = db.query(Post).options(joinedload(Post.drafts))
-    posts = (
-        query
-        .filter(Post.client_id == client_id, Post.dismissed.is_(False))
-        .order_by(Post.relevance_score.desc().nullslast(), Post.fetched_at.desc())
-        .all()
-    )
+# The per-view predicates, in SQL. These define what each tab contains.
+_VIEW_SQL = {
+    "posted": _POSTED,
+    "approved": and_(_APPROVED, ~_POSTED),
+    "draft": and_(_DRAFTED, ~_APPROVED, ~_POSTED),
+    "needs_review": and_(~_APPROVED, ~_POSTED),
+    "active": and_(~_DRAFTED, ~_APPROVED, ~_POSTED),
+}
 
-    # Only surface fresh posts — engaging early is the whole point. Fall back to
-    # fetch time when a post has no publish date (it was just scraped).
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
-    def recent(post):
-        dt = post.posted_at or post.fetched_at
-        if dt is None:
-            return True
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt >= cutoff
+def _visible_conditions(db: Session, client_id: int, max_age_days: int):
+    """The 'is this post in the client's feed at all' rules, as SQL conditions: not dismissed,
+    fresh enough (or carrying work), above the relevance floor (or unscored/working), and not
+    written by the client themselves or a same-company colleague.
 
-    # A post with in-progress work (a drafted/approved reply, or a generated one still
-    # in the Queue) must NEVER be hidden by recency — otherwise queued drafts vanish once
-    # the underlying post ages past the window. Recency only prunes the undrafted Queue.
-    def has_working_draft(post):
-        return any(d.status in ("pending", "drafted", "approved") for d in post.drafts)
-
-    posts = [p for p in posts if recent(p) or has_working_draft(p)]
-
-    # Hide the client's own posts and same-company colleagues' posts (safety net that
-    # also covers anything fetched before this rule existed). See app/profiles.py.
+    Shared by the feed query and the count/summary aggregates so all three agree by construction.
+    The author exclusion mirrors profiles.profile_slug(): pull '/in/<slug>' out of the URL in SQL."""
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=max_age_days)
+    dt = func.coalesce(Post.posted_at, Post.fetched_at)
+    conds = [
+        Post.client_id == client_id,
+        Post.dismissed.is_(False),
+        or_(dt >= cutoff, _WORKING),
+        or_(Post.relevance_score.is_(None),
+            func.round(Post.relevance_score * 10) >= MIN_DRAFT_RELEVANCE, _WORKING),
+    ]
     client = db.get(Client, client_id)
-    if client:
-        excluded = excluded_author_slugs(db, client)
-        if excluded:
-            posts = [
-                p for p in posts
-                if (profile_slug(p.author_profile_url) or profile_slug(p.source_ref)) not in excluded
-            ]
-
-    # Drop low-relevance posts from EVERY view — they only clutter the queue, and drafting on them
-    # produced the comments the reviewer called "not worth my time". Keep a post if it's unscored
-    # (scoring may still be pending) or already has in-progress work. Filtered, not deleted, so the
-    # threshold can be relaxed if the scorer ever under-rates a genuinely good post.
-    def too_irrelevant(post):
-        s = post.relevance_score
-        return s is not None and round(s * 10) < MIN_DRAFT_RELEVANCE and not has_working_draft(post)
-
-    posts = [p for p in posts if not too_irrelevant(p)]
-
-    # Order: newest DAY first, then most-relevant WITHIN each day (ties -> newest time). This
-    # surfaces fresh posts without discarding relevance — a barely-relevant newer post no longer
-    # buries a highly-relevant one from the same day. Recency uses the post's publish date
-    # (posted_at), falling back to fetch time only when there's no publish date.
-    def _order_key(post):
-        dt = post.posted_at or post.fetched_at
-        if dt and dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return (dt.date() if dt else date.min, post.relevance_score or 0.0,
-                dt or datetime.min.replace(tzinfo=timezone.utc))
-
-    posts.sort(key=_order_key, reverse=True)
-    return posts
-
-
-def _has(post, status) -> bool:
-    return any(d.status == status for d in post.drafts)
-
-
-def _in_view(post, view: str) -> bool:
-    """Whether a post belongs in a given tab. active/draft/approved/posted partition the
-    feed (each post lands in exactly one); "all" is everything; "needs_review" is a legacy alias."""
-    if view == "posted":
-        return _has(post, "posted")
-    if view == "approved":  # scientist-approved, waiting to be posted (not yet live)
-        return _has(post, "approved") and not _has(post, "posted")
-    if view == "draft":  # explicitly moved to Draft (status "drafted"), not yet approved/posted
-        return _has(post, "drafted") and not _has(post, "approved") and not _has(post, "posted")
-    if view == "needs_review":  # legacy alias
-        return not _has(post, "approved") and not _has(post, "posted")
-    if view == "all":
-        return True
-    # "active" — the Queue: not moved to draft/approved/posted (a generated "pending" reply stays here)
-    return not _has(post, "drafted") and not _has(post, "approved") and not _has(post, "posted")
+    excluded = excluded_author_slugs(db, client) if client else set()
+    if excluded:
+        slug = func.coalesce(
+            func.substring(func.lower(func.coalesce(Post.author_profile_url, "")), r"/in/([^/?#]+)"),
+            func.substring(func.lower(func.coalesce(Post.source_ref, "")), r"/in/([^/?#]+)"),
+            "",
+        )
+        conds.append(~slug.in_(list(excluded)))
+    return conds
 
 
 def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
@@ -156,34 +99,16 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
     """Egress-lean feed read: apply recency + relevance + the requested VIEW filter in SQL and
     paginate, so the backend fetches only the page actually shown instead of the client's entire
     post set (the old path pulled all ~900 rows on every load/tab-switch — the main egress hog).
-    Drafts for the page load via selectinload (one extra IN query — pagination-safe). The count
-    badges keep using the all-rows light path in _visible_posts, so they stay correct and cheap."""
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=max_age_days)
+    Drafts for the page load via selectinload (one extra IN query — pagination-safe)."""
     dt = func.coalesce(Post.posted_at, Post.fetched_at)
-    working = exists().where(and_(Draft.post_id == Post.id, Draft.status.in_(("pending", "drafted", "approved"))))
-    drafted = exists().where(and_(Draft.post_id == Post.id, Draft.status == "drafted"))
-    approved = exists().where(and_(Draft.post_id == Post.id, Draft.status == "approved"))
-    posted = exists().where(and_(Draft.post_id == Post.id, Draft.status == "posted"))
+    posted = _POSTED
 
-    q = (
-        db.query(Post)
-        .filter(Post.client_id == client_id, Post.dismissed.is_(False))
-        # fresh enough, OR carrying in-progress work (never hide queued/drafted work by age)
-        .filter(or_(dt >= cutoff, working))
-        # drop 0/10-relevance unless unscored or already being worked
-        .filter(or_(Post.relevance_score.is_(None),
-                    func.round(Post.relevance_score * 10) >= MIN_DRAFT_RELEVANCE, working))
-    )
+    q = db.query(Post).filter(*_visible_conditions(db, client_id, max_age_days))
     if view == "posted":
         q = q.filter(posted)
-    elif view == "approved":
-        q = q.filter(and_(approved, ~posted))
-    elif view == "draft":
-        q = q.filter(and_(drafted, ~approved, ~posted))
-    elif view == "needs_review":
-        q = q.filter(and_(~approved, ~posted))
-    elif view != "all":  # "active" (the Queue) — the default
-        q = q.filter(and_(~drafted, ~approved, ~posted))
+    elif view in _VIEW_SQL:
+        q = q.filter(_VIEW_SQL[view])
+    # "all" adds no view filter
 
     # newest DAY first, then most-relevant within the day, then newest time (matches _order_key)
     posts = (
@@ -193,16 +118,20 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
         .limit(max(1, min(limit, 200)))
         .all()
     )
-
-    # Hide the client's own / same-company posts (few; slug logic isn't SQL-friendly, so post-filter).
-    client = db.get(Client, client_id)
-    if client:
-        excluded = excluded_author_slugs(db, client)
-        if excluded:
-            posts = [
-                p for p in posts
-                if (profile_slug(p.author_profile_url) or profile_slug(p.source_ref)) not in excluded
-            ]
+    # Ship a PREVIEW of the post body, not the whole thing. Posts are now stored up to 2500 chars
+    # (needed so the drafter sees the full argument), but the card only shows a gist above the
+    # one-line summary, and "Open post" goes to LinkedIn for the rest. Sending the full body for
+    # every card would have made the feed ~4x heavier than before.
+    #
+    # EXPUNGE FIRST: these instances are only being serialised into the response, and trimming the
+    # attribute on a session-attached row would mark it dirty — a later flush would then write the
+    # truncated text back and permanently destroy the post body. Detaching makes that impossible.
+    # The drafting routes read their own Post row, so they still get the full text.
+    db.expunge_all()
+    for p in posts:
+        body = p.content_snippet or ""
+        if len(body) > _LIST_PREVIEW_CHARS:
+            p.content_snippet = body[:_LIST_PREVIEW_CHARS].rstrip() + "…"
     return posts
 
 
@@ -224,16 +153,21 @@ def post_counts(
     max_age_days: int = Query(14, description="same window as the post list"),
     db: Session = Depends(get_db),
 ):
-    """Per-tab counts for the badge on each tab (Queue/Draft/Approved/Posted/All). Computed
-    from the exact same visible set as the list, so the numbers always match the tabs."""
-    posts = _visible_posts(db, client_id, max_age_days, light=True)
-    return {
-        "active": sum(1 for p in posts if _in_view(p, "active")),
-        "draft": sum(1 for p in posts if _in_view(p, "draft")),
-        "approved": sum(1 for p in posts if _in_view(p, "approved")),
-        "posted": sum(1 for p in posts if _in_view(p, "posted")),
-        "all": len(posts),
-    }
+    """Per-tab counts for the badge on each tab (Queue/Draft/Approved/Posted/All).
+
+    Pure SQL aggregate: the database returns five integers instead of shipping every post row
+    (plus its drafts) to the app just to be counted in Python. Uses the same _visible_conditions
+    and _VIEW_SQL as the list, so a badge can't disagree with its tab."""
+    conds = _visible_conditions(db, client_id, max_age_days)
+    row = db.query(
+        func.count().filter(_VIEW_SQL["active"]).label("active"),
+        func.count().filter(_VIEW_SQL["draft"]).label("draft"),
+        func.count().filter(_VIEW_SQL["approved"]).label("approved"),
+        func.count().filter(_VIEW_SQL["posted"]).label("posted"),
+        func.count().label("all"),
+    ).select_from(Post).filter(*conds).one()
+    return {"active": row.active, "draft": row.draft, "approved": row.approved,
+            "posted": row.posted, "all": row.all}
 
 
 # Alert thresholds for the notification badge/pop-up. to_approve is set high because a large
@@ -254,32 +188,39 @@ def notifications_summary(
     clients, the oldest waiting item's age, and a per-client breakdown so a click can jump
     straight to the right client's tab. Same visible/in-view logic as the tabs, so the
     numbers always match. Age uses the draft's created_at (best available proxy for how long
-    it's been sitting — there's no status-change timestamp)."""
+    it's been sitting — there's no status-change timestamp).
+
+    Computed as SQL aggregates per client (counts + the oldest waiting draft's timestamp). This
+    endpoint is polled by every open dashboard, and it used to load every visible post row and its
+    drafts for all 8 clients on each poll (~250kB a call, tens of MB a day) purely to produce a
+    handful of numbers. Now the database returns the numbers."""
     now = datetime.now(timezone.utc)
-    # stage key -> (tab view for _in_view, the draft status whose age we measure)
+    # stage key -> (view predicate, the draft status whose age we measure)
     STAGE = {"to_post": ("approved", "approved"), "to_approve": ("draft", "drafted")}
-
-    def oldest_hours(items, status):
-        oldest = None
-        for p in items:
-            for d in p.drafts:
-                if d.status == status and d.created_at:
-                    ts = d.created_at if d.created_at.tzinfo else d.created_at.replace(tzinfo=timezone.utc)
-                    if oldest is None or ts < oldest:
-                        oldest = ts
-        return round((now - oldest).total_seconds() / 3600, 1) if oldest else None
-
     result = {k: {"total": 0, "oldest_hours": None, "by_client": []} for k in STAGE}
+
     for client in db.query(Client).order_by(Client.name).all():
-        posts = _visible_posts(db, client.id, max_age_days, light=True)
+        conds = _visible_conditions(db, client.id, max_age_days)
         for key, (view, status) in STAGE.items():
-            items = [p for p in posts if _in_view(p, view)]
-            if not items:
+            # oldest created_at among the drafts of THIS status on posts in this view
+            oldest_sq = (
+                db.query(func.min(Draft.created_at))
+                .join(Post, Post.id == Draft.post_id)
+                .filter(Draft.status == status, *conds, _VIEW_SQL[view])
+                .scalar_subquery()
+            )
+            row = db.query(
+                func.count().label("n"), oldest_sq.label("oldest")
+            ).select_from(Post).filter(*conds, _VIEW_SQL[view]).one()
+            if not row.n:
                 continue
-            oh = oldest_hours(items, status)
-            result[key]["total"] += len(items)
+            oh = None
+            if row.oldest:
+                ts = row.oldest if row.oldest.tzinfo else row.oldest.replace(tzinfo=timezone.utc)
+                oh = round((now - ts).total_seconds() / 3600, 1)
+            result[key]["total"] += row.n
             result[key]["by_client"].append(
-                {"id": client.id, "name": client.name, "count": len(items), "oldest_hours": oh}
+                {"id": client.id, "name": client.name, "count": row.n, "oldest_hours": oh}
             )
             if oh is not None and (result[key]["oldest_hours"] is None or oh > result[key]["oldest_hours"]):
                 result[key]["oldest_hours"] = oh
