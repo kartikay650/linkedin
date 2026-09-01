@@ -488,7 +488,12 @@ def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
         memory=memory_block, author=post.author_name, content=post.content_snippet,
         shape=("\n" + shape if shape else ""),
     )
-    content = _blocks((g_static, True), (c_static, True), (variable, False))
+    # Only the GLOBAL static block is marked cacheable, so the system message is byte-identical on
+    # every draft call for every client and the whole ~3.2k-token prefix is served from cache. The
+    # per-client block rides in the user message: it changes from client to client anyway, and
+    # including it in the system message made the system text differ per client, which dropped the
+    # measured cache hit rate to ~0 on the draft calls.
+    content = _blocks((g_static, True), (c_static, False), (variable, False))
     try:
         # effort="low": the model reasons about the post before writing. This is the step where
         # comprehension, stance and entity accuracy are won or lost, so it gets the thinking pass.

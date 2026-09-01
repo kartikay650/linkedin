@@ -30,14 +30,50 @@ class _Message:
         self.content = [_Block(text)]
 
 
-def _flatten(content):
-    """Content may be a plain string or a list of {type,text,cache_control} blocks
-    (from the old prompt-caching path). Either way we send one user string."""
-    if isinstance(content, list):
-        return "\n\n".join(
-            b["text"] for b in content if isinstance(b, dict) and b.get("text")
-        )
-    return content or ""
+def _split(content):
+    """Split prompt content into (system_text, user_text).
+
+    Content is either a plain string or a list of {type,text,cache_control} blocks. Blocks marked
+    with cache_control are the STATIC part of the prompt (house style, the fixed write rules, the
+    client's voice/brief); the rest is per-request.
+
+    The static part goes into a SYSTEM message and only the variable part into the user message.
+    This is what makes Azure's automatic prompt caching actually fire: measured on gpt-5.6-sol,
+    an identical ~3.2k-token prefix sent inside one combined user message caches 0% of the time,
+    while the same text sent as a system message caches ~99% of it once warm. We were shipping
+    everything as one user message, which is why a week of production traffic reported zero cache
+    reads. Order matters too — global-static blocks come before per-client ones so different
+    clients still share the same cached prefix."""
+    if not isinstance(content, list):
+        return "", (content or "")
+    system = "\n\n".join(
+        b["text"] for b in content
+        if isinstance(b, dict) and b.get("text") and b.get("cache_control")
+    )
+    user = "\n\n".join(
+        b["text"] for b in content
+        if isinstance(b, dict) and b.get("text") and not b.get("cache_control")
+    )
+    # Never send an empty user turn.
+    if not user.strip():
+        return "", system
+    return system, user
+
+
+# Running token/cache tally for this process. Prompt caching is worth ~90% off the cached input
+# tokens, and it silently stopped working once before (everything was being sent as one user
+# message), so keep the numbers observable rather than trusting it.
+USAGE = {"calls": 0, "input": 0, "cached": 0, "output": 0}
+
+
+def _record_usage(u):
+    try:
+        USAGE["calls"] += 1
+        USAGE["input"] += int(u.get("prompt_tokens") or 0)
+        USAGE["output"] += int(u.get("completion_tokens") or 0)
+        USAGE["cached"] += int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+    except Exception:
+        pass
 
 
 class _Messages:
@@ -46,14 +82,16 @@ class _Messages:
 
     def create(self, model=None, max_tokens=800, messages=None, extra_body=None,
                effort=None, **kw):
-        text = _flatten(messages[0]["content"])
+        system, text = _split(messages[0]["content"])
         url = (
             f"{settings.azure_openai_endpoint}/openai/deployments/{model}"
             f"/chat/completions?api-version={settings.azure_openai_api_version}"
         )
         headers = {"Content-Type": "application/json", "api-key": settings.azure_openai_key}
+        msgs = ([{"role": "system", "content": system}] if system.strip() else []) + \
+               [{"role": "user", "content": text}]
         body = {
-            "messages": [{"role": "user", "content": text}],
+            "messages": msgs,
             # reasoning tokens count toward completion; +900 headroom so a thinking pass can't
             # squeeze out the JSON reply.
             "max_completion_tokens": (max_tokens or 800) + 900,
@@ -73,7 +111,9 @@ class _Messages:
             try:
                 r = httpx.post(url, json=body, headers=headers, timeout=self._timeout)
                 if r.status_code == 200:
-                    ch = r.json()["choices"][0]
+                    payload = r.json()
+                    _record_usage(payload.get("usage") or {})
+                    ch = payload["choices"][0]
                     # content_filter / length with empty content -> "" -> caller falls back
                     return ch["message"].get("content") or ""
                 msg = r.text[:200]
