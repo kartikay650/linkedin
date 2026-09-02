@@ -335,31 +335,6 @@ def _expertise_brief(client: Client, voice_examples: list[str] | None) -> str:
         return ""
 
 
-_PLAN_PROMPT = """You are deciding how {name} should reply to a LinkedIn post. THINK IT THROUGH, then give a directive.
-
-Her expertise (use ONLY if the reply should be substantive):
-{brief}
-
-Reason about THIS post:
-1. What is the author actually DOING — making an argument/claim, sharing news or data, venting or being vulnerable, \
-celebrating a milestone, or posting a motivational affirmation? Look PAST the opening hook or novelty framing to the real purpose.
-2. Do they INVITE a substantive/expert response, or is this a human moment where a clinical/biomarker reply would feel \
-tone-deaf or salesy — even if the topic is technically in her field?
-3. If OTHER profiles have already commented on this exact post (shown below), her take MUST be genuinely different \
-from theirs and grounded in HER OWN distinct expertise — a different angle, not the same point reworded.
-4. Given all that, what should she actually say — and what should she NOT do?
-{siblings}
-Return ONLY JSON:
-{{"read": "2-3 sentences of your reasoning for points 1-4",
-  "approach": "ONE directive telling the writer exactly how to respond: the tone AND what to engage. Be explicit if she should NOT bring science/biomarkers/data here, and how her angle differs from any other profiles above.",
-  "core": "the post's main point if it makes one, else empty string",
-  "can_add": ["if the reply should be substantive: 1-3 grounded points from her expertise (no invented facts); else empty"],
-  "avoid": ["the hook/novelty/peripheral not to center on; include 'no clinical or biomarker talk' if this is a human moment"]}}
-
-Post by {author}:
-\"\"\"{content}\"\"\""""
-
-
 def _plan(client: Client, post: Post, brief: str, siblings_block: str = "") -> dict:
     """Tone directive for the drafter. We deliberately DON'T make a separate reasoning
     LLM call here: on the current model that step produced cautious, process-y "approach/
@@ -505,10 +480,6 @@ def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
     return drafts[0] if drafts else ""
 
 
-_CRIT_PROMPT = ('Intended approach for this comment: "{approach}". The draft: "{d}". Does it FOLLOW that approach — '
-                'right tone, engages the right thing, not tone-deaf, not shallow, not clinical/salesy where it should be '
-                'human, not centred on a peripheral hook? Respond ONLY with JSON: {{"ok": true or false, "fix": "short instruction if not ok, else empty"}}')
-
 # The post's OWN topic is pre-diagnosis / early-marker / prevention -> "before diagnosis/symptoms"
 # phrasing is ON-TOPIC here, not the banned canned tic. Context-gate the formula check so the
 # anti-repetition guardrail stops fighting these clients' actual subject matter (preventive medicine
@@ -534,33 +505,6 @@ def _hard_problems(text: str, avoid: list[str], allow_formula: bool) -> list[str
     if allow_formula:
         probs = [p for p in probs if "shows up" not in p]
     return probs
-
-
-def _tighten(text: str, allow_formula: bool) -> str:
-    """HARD length/formula guardrail: if a draft runs long or uses a banned construction, force a
-    tight rewrite; keep it only if genuinely cleaner. Runs at most twice."""
-    for _ in range(2):
-        v = check_violations(text)
-        if allow_formula:
-            v = [x for x in v if "shows up" not in x]
-        if not (any(("wordy" in x or "sentences" in x or "hedge" in x or "shows up" in x) for x in v) or _wc(text) > 26):
-            break
-        extra = "" if allow_formula else ' Do NOT use the vague "X before symptoms/diagnosis/a scan" template.'
-        try:
-            nt = str(extract_json(_call(settings.draft_model,
-                f'Rewrite in ONE or two short sentences, MAX 22 words, keeping the exact point and her voice. '
-                f'Remove any "tends to"/"seems to".{extra} Comment: "{text}". Respond ONLY with JSON: {{"text": "..."}}',
-                300, 30.0)).get("text", "")).strip()
-        except Exception:
-            break
-        nv = check_violations(nt)
-        if allow_formula:
-            nv = [x for x in nv if "shows up" not in x]
-        if nt and len(nv) <= len(v) and _wc(nt) <= _wc(text):
-            text = nt
-        else:
-            break
-    return text
 
 
 def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid: list[str],
@@ -717,4 +661,10 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
         retry = _refine_once(client, post, current_text, (instruction + " " + fix).strip(), memory_block)
         if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
             text = retry
-    return _tighten(text, allow)
+    # No _tighten pass here. That forced-shortening step gets only the bare sentence and
+    # "make it shorter" — no house style, no voice samples, no viewpoints, no reasoning — so it
+    # reliably flattened a comment's rhythm and voice. It was removed from the draft path for
+    # that reason; leaving it on the tweak path meant the same comment was treated differently
+    # depending on which button was pressed. Length is already enforced by the write rules in
+    # the prompt and by the _hard_problems regenerate above, both of which keep full context.
+    return text
