@@ -371,15 +371,34 @@ def _rules_block(client: Client) -> str:
 _WRITE_RULES = """=== HOW TO WRITE THIS REPLY ===
 Follow the RESPONSE DIRECTIVE given below. If it says stay human: warm, specific to what they said, bring NO science/data/biomarkers. If it says engage the argument: add a grounded point in her voice.
 
-NOTHING TO FACT-CHECK (hard rule, overrides everything else). No one on the team is a scientist who can
-verify claims, so a comment that needs checking is unusable. Therefore:
-- State ONLY what is already in the post, or what is in this person's own material below.
+NOTHING TO FACT-CHECK (hard rule, overrides everything else). No one on the team is a scientist who
+can verify a factual claim, so a comment that needs checking is unusable. But her OPINION is not a
+factual claim: saying what she believes needs no verification, because it is attributed to her. Only
+three things may appear in the comment:
+1. What the post itself says.
+2. What THIS PERSON BELIEVES — her viewpoints and key messages, given below. This is the strongest
+   thing you can bring and it needs no evidence. State it as her position, in her words.
+3. Nothing else.
+So:
 - NEVER introduce a study, statistic, number, percentage, duration, dosage, mechanism, company,
   institution, product or person that is not already in the post or her material.
-- No new clinical/statistical claim of your own. If your point needs evidence to stand up, cut it and
-  make a plainer observation instead.
+- No new clinical or statistical claim of your own. If a POINT needs evidence to stand up, replace it
+  with what she believes about the subject — do not water it down into a plainer observation.
 - Keep the science LIGHT: at most ONE grounded point. Do not stack claims. Over-claiming and
   claim-density damage the client's credibility more than a simple comment ever would.
+
+ADD SOMETHING. DO NOT RESTATE THE POST. Repeating a fact the post already stated, then adding an
+abstract principle ("Prevention starts while people still feel healthy"), is the single thing that
+makes these comments worthless — the author already knows what they wrote, and no one replies to
+their own words handed back to them. Read the post, decide which of these it deserves, and commit:
+- Most posts squarely in her field: bring HER POSITION on the subject. A real view, from her
+  viewpoints below, that the post does not itself contain. This is the default for technical posts,
+  studies, industry news and anything that invites a view.
+- A personal story, a loss, a milestone, something vulnerable, or a light everyday post: bring no
+  position at all. React like a person. Warmth is the whole comment, and a stance here is intrusive.
+- A post genuinely outside her expertise: a specific, plain observation about one thing in it is
+  enough. Do not manufacture a view she does not hold.
+Decide from the post which of the three this is. Never assert a position she has not stated below.
 
 GET THE POST RIGHT.
 - Read what the post actually says before writing. React to its real subject, not the hook.
