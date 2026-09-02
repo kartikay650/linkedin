@@ -229,7 +229,8 @@ class Post(Base):
 
     author_name = Column(String, default="")
     author_profile_url = Column(String, default="")
-    post_url = Column(String, nullable=False)  # unique per (client_id, post_url), see __table_args__
+    # indexed: the feed quota looks up sibling rows by post_url (see routers/posts.py)
+    post_url = Column(String, nullable=False, index=True)  # unique per (client_id, post_url), see __table_args__
     content_snippet = Column(Text, default="")
     posted_at = Column(DateTime, nullable=True)
     engagement = Column(JSON, default=dict)  # {"likes": n, "comments": n}
@@ -249,7 +250,7 @@ class Draft(Base):
     __tablename__ = "drafts"
 
     id = Column(Integer, primary_key=True)
-    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
     variant_index = Column(Integer, default=0)
     text = Column(Text, nullable=False)
     edited_text = Column(Text, nullable=True)

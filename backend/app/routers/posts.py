@@ -2,8 +2,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, exists, func, or_
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy.orm import Session, aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
@@ -56,6 +56,43 @@ _DRAFTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "drafte
 _APPROVED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "approved"))
 _POSTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "posted"))
 
+# A post reaches at most this many client feeds — the two scoring highest for it. The same
+# LinkedIn post was being served to up to 8 client feeds at once, so one author collected comments
+# from most of the roster and their audience noticed ("we're all commenting under the same
+# accounts, my clients are flagging it").
+MAX_FEEDS_PER_POST = 2
+
+# Grandfather clause. Deliberately ANY draft, not _WORKING: _WORKING omits 'posted', so a post
+# whose comment is already live would drop out of the Posted tab the moment this rule shipped.
+_HAS_ANY_DRAFT = exists().where(Draft.post_id == Post.id)
+
+
+def _within_feed_quota():
+    """True when this row is one of the MAX_FEEDS_PER_POST highest-scoring feeds for its post_url,
+    or already carries work.
+
+    Counts the rows that rank strictly AHEAD of this one rather than computing a rank, so it reads
+    as a plain SQL condition and composes into _visible_conditions with everything else. Ties break
+    on client_id so the ordering is deterministic and a feed cannot flicker between loads.
+    Costs ~22ms across the whole table given the posts(post_url) index; without that index it was
+    568ms, which is why the migration alongside this adds it."""
+    other = aliased(Post)
+    mine = func.coalesce(Post.relevance_score, -1.0)
+    theirs = func.coalesce(other.relevance_score, -1.0)
+    ahead = (
+        select(func.count())
+        .select_from(other)
+        .where(
+            other.post_url == Post.post_url,
+            other.dismissed.is_(False),
+            other.client_id != Post.client_id,
+            or_(theirs > mine, and_(theirs == mine, other.client_id < Post.client_id)),
+        )
+        .scalar_subquery()
+    )
+    return or_(ahead < MAX_FEEDS_PER_POST, _HAS_ANY_DRAFT)
+
+
 # The per-view predicates, in SQL. These define what each tab contains.
 _VIEW_SQL = {
     "posted": _POSTED,
@@ -68,8 +105,9 @@ _VIEW_SQL = {
 
 def _visible_conditions(db: Session, client_id: int, max_age_days: int):
     """The 'is this post in the client's feed at all' rules, as SQL conditions: not dismissed,
-    fresh enough (or carrying work), above the relevance floor (or unscored/working), and not
-    written by the client themselves or a same-company colleague.
+    fresh enough (or carrying work), above the relevance floor (or unscored/working), not written
+    by the client themselves or a same-company colleague, and among the top MAX_FEEDS_PER_POST
+    client feeds for that post.
 
     Shared by the feed query and the count/summary aggregates so all three agree by construction.
     The author exclusion mirrors profiles.profile_slug(): pull '/in/<slug>' out of the URL in SQL."""
@@ -81,6 +119,7 @@ def _visible_conditions(db: Session, client_id: int, max_age_days: int):
         or_(dt >= cutoff, _WORKING),
         or_(Post.relevance_score.is_(None),
             func.round(Post.relevance_score * 10) >= MIN_DRAFT_RELEVANCE, _WORKING),
+        _within_feed_quota(),
     ]
     client = db.get(Client, client_id)
     excluded = excluded_author_slugs(db, client) if client else set()
