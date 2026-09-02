@@ -117,7 +117,14 @@ def _voice_block(client: Client) -> str:
     written description. Falls back to the legacy tone_profile."""
     parts = []
     if (client.voice_samples or "").strip():
-        parts.append("Verbatim examples of their own words:\n" + client.voice_samples.strip())
+        # If any sample is transcribed speech (podcast/interview/video), it is the best register
+        # anchor we have — it is literally how this person talks, which is the target.
+        raw = client.voice_samples.strip()
+        spoken = any(k in raw.lower() for k in ("podcast", "interview", "spoken", "video"))
+        head = ("Verbatim examples of their own words. Some of these are transcribed SPEECH — those "
+                "are the truest guide to how they actually talk, so match that rhythm above all:\n"
+                if spoken else "Verbatim examples of their own words:\n")
+        parts.append(head + raw)
     guide = (client.voice_guide or client.tone_profile or "").strip()
     if guide:
         parts.append("How they write:\n" + guide)
