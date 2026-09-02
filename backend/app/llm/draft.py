@@ -398,7 +398,7 @@ comment could not sit under any other post. BANNED generic filler: "track it ove
 measurements", "careful patient selection", "the confidence it warrants", "broader clinical/health
 context", "clinical interpretation", "longitudinal follow-up". Never use "curious" or "makes me curious".
 
-ALWAYS short (one or two sentences, MAX 22 words), structurally different from her recent comments, and
+Let the post set the length, usually short and longer when it earns it. Structurally different from her recent comments, and
 never the words "tends to" / "seems to". Respond ONLY with JSON: {"drafts": ["your one reply"]}"""
 
 _DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something she typed.
@@ -581,7 +581,7 @@ The unverifiable part(s): {flagged}
 Rewrite it so it makes a plainer, safe observation instead — keep her voice and keep it about the same
 post, but remove the claim entirely rather than softening it. Do not introduce any new fact, number,
 study, mechanism, company, institution or person. Prefer her perspective or a simple human reaction
-over anything that asserts evidence. One or two sentences, MAX 22 words.
+over anything that asserts evidence. Keep it as short as the point needs.
 
 The post being replied to:
 \"\"\"{content}\"\"\"

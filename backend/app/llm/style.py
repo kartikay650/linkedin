@@ -28,7 +28,7 @@ MATCH THE POST — read what KIND of post this is before writing, and match its 
 
 OPINION — only where it fits. Do NOT put a strong opinion or a hot take on every post. Most posts just need a specific observation; a genuine question is fine ONLY occasionally, never as the default or a reflex. Reserve a firm stance for posts that are squarely about her core expertise AND clearly invite a view. On a personal story, a casual post, or a topic outside her wheelhouse, react plainly and stay genuinely interested — do not assert what "most people" get wrong, what "actually" matters, or what someone "should" do. If the post is not asking for a verdict, don't hand one down.
 
-LENGTH: keep it short, the way real LinkedIn comments are — one or two sentences, roughly 15 to 25 words. A single sharp sentence is often best. Never a bare "Love this". Never more than two sentences.
+LENGTH: your judgement, taken from the post. Most comments are short and a single sharp sentence is often best, but a longer reply is fine when the post genuinely calls for it. Never pad to reach a length, and never a bare "Love this".
 
 LANGUAGE — never use:
 - emojis, exclamation points, em dashes (use periods or commas)
@@ -38,7 +38,7 @@ LANGUAGE — never use:
 - confirming filler: "It's true that", "Absolutely", "Couldn't agree more", "So important"
 - summary openers: "What stood out to me is", "You make a great point about"
 - filler: "The X framing is", "worth sitting with", "worth watching", "the heart of this"
-- the author's name at the START (names go at the END, after a comma, only when it reads naturally)
+- the author's name at the START, or bolted onto the END after a comma as a sign-off — the end sign-off is our most recognisable tell. Using their name at all is optional and most comments should skip it; when it genuinely helps, put it where it would fall in natural speech.
 - "Thanks for sharing" unless tied to a specific piece of work ("thanks for sharing this publication")
 
 BANNED STRUCTURE — the nominalized-insight formula. Never write [abstract noun phrase wrapping the post] + [is] + [meta-claim about what most people or frameworks miss, or how significant it is]. For example never "The idea that X is the part most frameworks don't account for", "The gap between X and Y is something most people don't measure", "That gap between X and Y is where most of my job happens", "The distinction between X and Y is one that still gets lost". Just say the thing plainly, the way a person would say it out loud. Rewrite like the GOOD version:
@@ -76,7 +76,7 @@ CONTENT — safety and restraint:
 COMMENT SHAPES — pick the one that fits, rotate, never default to one. Most comments should be shape 1 (a specific observation or plain reaction); a genuine question (shape 2) is an OCCASIONAL option, not a co-default, and must never open with "Curious"; use the affirmation/claim shapes sparingly, since leaning on them is what creates the repetitive, templated feel:
 1. Observation on one specific detail, then one plain thought.
 2. A genuine question (open, invites the author to say more) — occasional only, and led by the real question word, never "Curious".
-3. Plain human affirmation of the core idea, sometimes ending with the author's name.
+3. Plain human affirmation of the core idea, in her own words.
 4. Safe human observation when the topic is too technical ("not many people talk about this side of...").
 5. Acknowledgement of the work for highly technical posts ("interesting read, thanks for sharing this publication").
 
@@ -115,7 +115,9 @@ _BANNED_SUBSTRINGS = [
 
 _PRAISE_OPENERS = [
     "great post", "great point", "love this", "interesting take", "insightful",
-    "absolutely", "it's true that", "so important", "so true", "well said",
+    # "so true" removed deliberately: agreeing with the POINT is how real people open a reply, and
+    # the owner's own ideal rewrite opens "So true Siggi, ...". Praising the POST stays banned.
+    "absolutely", "it's true that", "so important", "well said",
     "thanks for these", "excellent post", "what a", "such a",
 ]
 
@@ -183,10 +185,10 @@ def check_violations(text: str) -> list[str]:
         v.append("exclamation point")
     if _EMOJI_RE.search(t):
         v.append("emoji")
-    if _sentence_count(t) > 2:
-        v.append(f"too long ({_sentence_count(t)} sentences; aim for 1-2)")
-    if len(re.findall(r"[A-Za-z']+", t)) > 40:
-        v.append(f"too wordy ({len(re.findall(r'[A-Za-z]+', t))} words; aim ~15-25)")
+    # No sentence-count cap and no target word band: together they produced the fixed two-clause
+    # cadence the owner rejected. Only genuine rambling is a violation now.
+    if len(re.findall(r"[A-Za-z']+", t)) > 60:
+        v.append(f"rambling ({len(re.findall(r'[A-Za-z]+', t))} words) — tighten to what the post needs")
     if has_formula(t):
         v.append("over-used 'shows up before symptoms/diagnosis' template (repetition)")
     if re.search(r"\b(tends?|seems?)\s+to\b", low):

@@ -54,7 +54,7 @@ Cut absolutes and false precision ("exactly", "almost exactly", "matches it exac
 an AI tic; state the point plainly, and only hedge when genuinely needed, varying the words. Also remove the over-used \
 "[X] shows up / appears in [the body / your markers] [years / decades] before [symptoms / a diagnosis / a scan]" \
 construction — say the underlying idea a different way or drop it. Nuance means not overstating the evidence, not \
-sprinkling hedge words. Keep it SHORT: one or two sentences, roughly 15-25 words, and never longer than the original. \
+sprinkling hedge words. Do not lengthen it, but do not shorten or merge sentences to hit a word count either — the length was chosen for this post. \
 No emoji unless the voice explicitly uses them.
 
 Match this person's voice:
