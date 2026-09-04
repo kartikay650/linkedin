@@ -256,6 +256,12 @@ class Draft(Base):
     edited_text = Column(Text, nullable=True)
     # Clinical-safety trace: [{text, level: grounded|general|unverified, note, source_url}]
     provenance = Column(JSON, default=list)
+    # Writing-quality warning shown on the card, e.g. the comment still reads as two unjoined
+    # statements after a regenerate. Deliberately NOT stored in `provenance`: that column is the
+    # clinical-safety trace, and _flagged_claims() fires strip_unverifiable() on anything marked
+    # unverified there — a style warning would trigger a fact-check rewrite it has no business
+    # triggering.
+    quality_note = Column(Text, nullable=True)
     status = Column(Enum(DraftStatus), default=DraftStatus.pending)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

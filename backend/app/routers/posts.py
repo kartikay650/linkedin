@@ -8,6 +8,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft, strip_unverifiable
+from app.llm.style import has_stacked_statements
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
 from app.models import Client, ClientDocument, Draft, Post
 from app.profiles import excluded_author_slugs
@@ -21,6 +22,10 @@ router = APIRouter(tags=["posts"])
 # there reads as polite noise. The scorer's own distribution has a natural gap at 4-6, so 4 is a
 # clean cut. Unscored posts and posts already carrying work are always kept.
 MIN_DRAFT_RELEVANCE = 4
+
+# Shown on the card when a draft still reads as two unjoined statements after a regenerate.
+STACKED_NOTE = ("AI could not get this one right — it reads as two separate statements "
+                "rather than one flowing sentence. Worth rewriting or regenerating.")
 
 # How much of a post body the feed ships per card. The card shows a gist under the one-line
 # summary; the full text (now up to 2500 chars, for the drafter) never needs to reach the browser.
@@ -409,7 +414,13 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
 
     created = []
     for i, (text, provenance) in enumerate(results):
-        draft = Draft(post_id=post.id, variant_index=i, text=text, provenance=provenance)
+        # The drafter regenerates once when it detects this shape, but the retry sometimes comes
+        # back the same way and there is no way to force the model to write better. Rather than
+        # ship it as though it were fine, or return nothing and make the reviewer click again,
+        # label it and let them judge — they still get both options.
+        note = (STACKED_NOTE if has_stacked_statements(text) else None)
+        draft = Draft(post_id=post.id, variant_index=i, text=text, provenance=provenance,
+                      quality_note=note)
         db.add(draft)
         created.append(draft)
     db.commit()

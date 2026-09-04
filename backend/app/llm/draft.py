@@ -472,7 +472,43 @@ Author: {author}
 \"\"\"
 {content}
 \"\"\"
-{shape}"""
+{shape}
+
+=== TWO CHECKS BEFORE YOU RETURN (the last things you read, and the two we get wrong most) ===
+1. NOTHING STACKED. If your comment is two short statements with a full stop between them and no
+   comma anywhere, it is wrong. Either they are one thought, in which case write ONE sentence and
+   join the clauses (so / but / because / when / if), or the second genuinely adds something, in
+   which case it needs to read as speech and not as a summary of the first. Never end on an
+   abstraction or a principle — put the concrete part LAST. Vary how you connect; reaching for
+   "because" every time is its own tell.
+2. COULD THEY REPLY TO THIS? The author already knows what they wrote, so a comment that hands
+   their own point back gives them nothing to answer. Leave something a person could agree with,
+   argue with, or add to."""
+
+
+def _participant_note(client: Client, post: Post) -> str:
+    """Warn the drafter when the CLIENT is named in the post they are replying to.
+
+    excluded_author_slugs() already stops a client commenting on their own posts, but nothing
+    covered the case where somebody else's post is ABOUT them. Live example: Deepti Agarwal
+    announced a session with "Dr. Joseph Raffaele, MD, who is five years into using this in real
+    patients", and we generated Raffaele himself asking outsiders how to interpret GlycanAge —
+    the thing he was being interviewed as the expert on. Matching on surname only, since first
+    names collide ("Jo Dalton" in a post is not our client "Dr. Joe Raffaele")."""
+    surname = re.sub(r"^(Dr\.?|Prof\.?|Mr\.?|Ms\.?|Mrs\.?)\s+", "", (client.name or "").strip())
+    surname = surname.split(" ")[-1] if surname else ""
+    body = post.content_snippet or ""
+    if len(surname) < 4 or surname.lower() not in body.lower():
+        return ""
+    return (
+        "=== YOU ARE IN THIS POST ===\n"
+        f"This post names {client.name}. You are a PARTICIPANT here, not an outside observer. Do "
+        "NOT ask a question about your own work, your own results, or a subject you are being "
+        "presented as the expert on — it reads as though you have forgotten it is you. Reply as "
+        "the person being written about: acknowledge it, add something only you would know from "
+        "doing the work, or say what you are looking forward to. Never ask the audience to explain "
+        "your own field back to you.\n=== END ==="
+    )
 
 
 def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
@@ -483,11 +519,12 @@ def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
         viewpoints=_viewpoints_block(client),
         rules=_rules_block(client), feedback=_feedback_block(client), brief=(brief or "(none)"),
     )
+    part = _participant_note(client, post)
     variable = _DRAFT_VARIABLE.format(
         approach=plan.get("approach", ""), core=plan.get("core", ""),
         can_add="; ".join(plan.get("can_add") or []), avoid="; ".join(plan.get("avoid") or []),
         memory=memory_block, author=post.author_name, content=post.content_snippet,
-        shape=("\n" + shape if shape else ""),
+        shape=("\n" + shape if shape else "") + (("\n\n" + part) if part else ""),
     )
     # Only the GLOBAL static block is marked cacheable, so the system message is byte-identical on
     # every draft call for every client and the whole ~3.2k-token prefix is served from cache. The
@@ -550,7 +587,10 @@ def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid:
         fix = "Also fix: " + "; ".join(probs) + ". Keep it specific and in her voice."
         retry = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block,
                                       (shape + " " + fix).strip())
-        if retry:
+        # Only take the retry if it actually fixed something. This used to accept it blind, so a
+        # regenerate that tripped the same rule replaced a draft that was no worse — one stacked
+        # comment shipped that way in the benchmark. refine_draft already compared; this didn't.
+        if retry and len(_hard_problems(retry, avoid, allow)) < len(probs):
             text = retry
     return text
 

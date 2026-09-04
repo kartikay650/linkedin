@@ -184,6 +184,7 @@ class DraftOut(BaseModel):
     text: str
     edited_text: Optional[str]
     provenance: list[dict] = []
+    quality_note: Optional[str] = None
     status: str
 
     class Config:

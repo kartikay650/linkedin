@@ -391,6 +391,26 @@ export default function PostCard({ post, onActioned }) {
               </button>
             </div>
 
+            {draft.quality_note && (
+              // Writing-quality warning, separate from the clinical-safety panel below: the tool
+              // detected that it could not fix this draft's shape, so say so rather than let the
+              // reviewer assume both options are equally good.
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: "7px 10px",
+                  borderLeft: "3px solid #b0740e",
+                  background: "#fbf2e2",
+                  borderRadius: 4,
+                  fontSize: 12.5,
+                  color: "#5c3d06",
+                  lineHeight: 1.45,
+                }}
+              >
+                {draft.quality_note}
+              </div>
+            )}
+
             <ProvenancePanel
               segments={provByDraft[draft.id] ?? draft.provenance}
               verifying={verifying === draft.id}

@@ -77,10 +77,24 @@ nothing connects them. Real speech connects its clauses. Compare:
             psycho-neuro-immune axis, psychological burden can shape immune function."
   HUMAN:   "I'm glad to see mental health treated as part of longevity instead of something
             separate, because the stress shows up in the biology too."
-So:
-- Prefer ONE sentence that flows. Join clauses with so / because / and / but / if.
-- Use a plain first-person verb: "I prefer", "I start with", "I can't", "I'm glad", "I look for".
-  NOT a pronouncement: "I want X measured", "X needs Y", "X belongs at the centre of Y".
+WHAT ACTUALLY GOES WRONG, and it is not the missing joining word. Look at the robotic examples
+above: the second sentence RESTATES the first in more abstract words. Same thought, said twice, at
+two altitudes. That is what makes it sound machine-written. The human versions either fold the two
+thoughts into one sentence, or make the second sentence do something genuinely different.
+
+So DECIDE, for this specific post, and think about it before you write:
+- Are these really one thought? Then write ONE sentence and let the clauses hang together the way
+  they would in speech.
+- Are they two? Then the second must ADD something the first did not — a consequence, a turn, a
+  concession, a specific example, what you do about it. If the second sentence could be deleted
+  without losing anything, delete it.
+- There is NO required joining word and no required shape. Do not reach for "because" every time,
+  do not reach for "so" every time, and do not make every comment one long sentence either. If your
+  recent comments below all connect the same way, connect this one differently. A formula applied
+  every time is exactly as machine-like as no formula at all.
+- Sometimes the right answer is a plain first-person verb ("I prefer", "I start with", "I'm glad",
+  "I look for") and sometimes it is no first person at all. Judge it from the post. What you must
+  not do is issue a pronouncement ("X needs Y", "X belongs at the centre of Y").
 - Never use "I'd rather" — it is an AI tic.
 - Cut analytical tails: "..., which a single score can obscure", "..., which means", "..., making it".
 - No jargon or technical shorthand a person would not type into a comment box.
@@ -197,6 +211,15 @@ def has_formula(text: str) -> bool:
     return any(r.search(text or "") for r in _FORMULA_RES)
 
 
+def has_stacked_statements(text: str) -> bool:
+    """Two or more sentences with no comma anywhere: the shape the owner identified as the reason
+    these read as machine-written ("the first sentence is doing fine, the second is where it gets
+    bad, because there is no joiner in between"). Validated against every comment she has judged:
+    true for 6 of the 7 she rejected, false for all 8 she approved."""
+    t = (text or "").strip()
+    return _sentence_count(t) >= 2 and "," not in t
+
+
 def check_violations(text: str) -> list[str]:
     """Return a list of house-style violations in a draft. Empty list = clean."""
     t = (text or "").strip()
@@ -212,6 +235,13 @@ def check_violations(text: str) -> list[str]:
     # cadence the owner rejected. Only genuine rambling is a violation now.
     if len(re.findall(r"[A-Za-z']+", t)) > 60:
         v.append(f"rambling ({len(re.findall(r'[A-Za-z]+', t))} words) — tighten to what the post needs")
+    # STACKED STATEMENTS: two or more sentences with no comma anywhere. The owner's diagnosis was
+    # that the first sentence is usually fine and the second arrives unattached, re-saying the first
+    # at a higher altitude. Validated against every comment she has actually judged: this fires on
+    # 6 of the 7 she rejected and 0 of the 8 she approved (the 7th is caught by the name-sign-off
+    # rule). The humanizer fuses these before the gate sees them; this is the backstop.
+    if has_stacked_statements(t):
+        v.append("stacked statements — fuse them into one sentence with a connector")
     if has_formula(t):
         v.append("over-used 'shows up before symptoms/diagnosis' template (repetition)")
     if re.search(r"\b(tends?|seems?)\s+to\b", low):
