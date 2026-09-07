@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -22,6 +22,15 @@ router = APIRouter(tags=["posts"])
 # there reads as polite noise. The scorer's own distribution has a natural gap at 4-6, so 4 is a
 # clean cut. Unscored posts and posts already carrying work are always kept.
 MIN_DRAFT_RELEVANCE = 4
+# Priority creators clear a slightly lower bar. Priority decides WHO gets a post; this decides
+# whether it is worth commenting on at all, and the owner wanted a little more latitude for the
+# eight accounts she named than for the rest of the list.
+PRIORITY_MIN_RELEVANCE = 3
+
+
+def _relevance_floor():
+    """The relevance bar for a row: lower for a post from one of this client's priority creators."""
+    return case((Post.is_priority, PRIORITY_MIN_RELEVANCE), else_=MIN_DRAFT_RELEVANCE)
 
 # Shown on the card when a draft still reads as two unjoined statements after a regenerate.
 STACKED_NOTE = ("AI could not get this one right — it reads as two separate statements "
@@ -84,6 +93,9 @@ def _within_feed_quota():
     other = aliased(Post)
     mine = func.coalesce(Post.relevance_score, -1.0)
     theirs = func.coalesce(other.relevance_score, -1.0)
+    # Ordering key is (is_priority, relevance, client_id). Priority comes FIRST so a client given
+    # first claim on a creator keeps a slot even when two other clients score the post higher —
+    # that is the whole point of the flag. The second slot still goes to the next-best client.
     ahead = (
         select(func.count())
         .select_from(other)
@@ -91,7 +103,12 @@ def _within_feed_quota():
             other.post_url == Post.post_url,
             other.dismissed.is_(False),
             other.client_id != Post.client_id,
-            or_(theirs > mine, and_(theirs == mine, other.client_id < Post.client_id)),
+            or_(
+                and_(other.is_priority.is_(True), Post.is_priority.is_(False)),
+                and_(other.is_priority == Post.is_priority, theirs > mine),
+                and_(other.is_priority == Post.is_priority, theirs == mine,
+                     other.client_id < Post.client_id),
+            ),
         )
         .scalar_subquery()
     )
@@ -123,7 +140,7 @@ def _visible_conditions(db: Session, client_id: int, max_age_days: int):
         Post.dismissed.is_(False),
         or_(dt >= cutoff, _WORKING),
         or_(Post.relevance_score.is_(None),
-            func.round(Post.relevance_score * 10) >= MIN_DRAFT_RELEVANCE, _WORKING),
+            func.round(Post.relevance_score * 10) >= _relevance_floor(), _WORKING),
         _within_feed_quota(),
     ]
     client = db.get(Client, client_id)
@@ -362,12 +379,14 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     if (
         not already_drafted
         and post.relevance_score is not None
-        and round(post.relevance_score * 10) < MIN_DRAFT_RELEVANCE
+        and round(post.relevance_score * 10) < (PRIORITY_MIN_RELEVANCE if post.is_priority
+                                                 else MIN_DRAFT_RELEVANCE)
     ):
         raise HTTPException(
             422,
             f"This post scored {round(post.relevance_score * 10)}/10 for {post.client.name} — below the "
-            f"{MIN_DRAFT_RELEVANCE}/10 bar, so a comment would be polite noise rather than value. "
+            f"{PRIORITY_MIN_RELEVANCE if post.is_priority else MIN_DRAFT_RELEVANCE}/10 bar, so a "
+            "comment would be polite noise rather than value. "
             "Skip it, or raise its relevance if the score looks wrong.",
         )
 

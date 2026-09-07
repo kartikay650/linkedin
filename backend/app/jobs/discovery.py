@@ -13,13 +13,14 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.llm.relevance import score_post
 from app.models import Client, Creator, CreatorClient, Post, WatchCreator
-from app.profiles import is_own_or_colleague_post
+from app.profiles import is_own_or_colleague_post, profile_slug
 from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
 
 # Recent posts to pull per source. Watch-creators (hand-picked, high-priority) get
@@ -243,6 +244,22 @@ def _build_webhook(source_ref: str, creator_label: str = "") -> dict:
     }
 
 
+def _is_priority_creator(db: Session, client_id: int, source_ref: str) -> bool:
+    """Has this client been given first claim on this creator? Read once per saved post, in a
+    background job, so a small query here is fine — and it keeps the feed read cheap."""
+    slug = profile_slug(source_ref)
+    if not slug:
+        return False
+    row = (
+        db.query(CreatorClient.id)
+        .join(Creator, Creator.id == CreatorClient.creator_id)
+        .filter(CreatorClient.client_id == client_id, CreatorClient.priority.is_(True))
+        .filter(func.lower(Creator.profile_url).contains(f"/in/{slug}"))
+        .first()
+    )
+    return row is not None
+
+
 def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -> None:
     # Never surface a client's own posts, or a same-company colleague's, in their feed.
     if is_own_or_colleague_post(db, client, raw.get("author_profile_url", ""), source_ref):
@@ -258,6 +275,7 @@ def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -
         content_snippet=raw["content_snippet"],
         posted_at=raw.get("posted_at"),
         engagement=raw.get("engagement", {}),
+        is_priority=_is_priority_creator(db, client.id, source_ref),
     )
     db.add(post)
     try:

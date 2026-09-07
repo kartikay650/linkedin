@@ -125,6 +125,10 @@ class CreatorClient(Base):
     # Last time this creator was fetched FOR THIS CLIENT — the cadence gate reads it so
     # infrequent posters aren't re-scraped on every sync.
     last_fetched_at = Column(DateTime, nullable=True)
+    # This client gets FIRST claim on this creator's posts: they take one of the two feed slots
+    # regardless of who else scores higher, and the second slot goes to the next-best client.
+    # Requested for Dr. Joe Raffaele across eight longevity accounts.
+    priority = Column(Boolean, default=False, nullable=False)
 
     creator = relationship("Creator", back_populates="client_links")
     client = relationship("Client", back_populates="creator_links")
@@ -231,6 +235,11 @@ class Post(Base):
     author_profile_url = Column(String, default="")
     # indexed: the feed quota looks up sibling rows by post_url (see routers/posts.py)
     post_url = Column(String, nullable=False, index=True)  # unique per (client_id, post_url), see __table_args__
+    # Stamped at scrape time from the creator_clients.priority flag, NOT computed when the feed is
+    # read. Two reasons: the read-time version needs a correlated subquery per row inside the feed
+    # quota's own subquery, and stamping means the change applies only to posts fetched from now on
+    # — existing rows stay false, so nothing is retroactively re-ranked into anyone's queue.
+    is_priority = Column(Boolean, default=False, nullable=False)
     content_snippet = Column(Text, default="")
     posted_at = Column(DateTime, nullable=True)
     engagement = Column(JSON, default=dict)  # {"likes": n, "comments": n}
