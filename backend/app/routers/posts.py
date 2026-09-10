@@ -65,7 +65,16 @@ def _docs_text(db: Session, client_id: int) -> str:
 
 # Draft-status existence tests, reused by the feed query AND the count aggregates so a badge can
 # never disagree with the tab it labels.
-_WORKING = exists().where(and_(Draft.post_id == Post.id, Draft.status.in_(("pending", "drafted", "approved"))))
+# "We have done work on this post, so never hide it." Includes 'posted' — that omission was a live
+# bug: the age and relevance exemptions below both used a version limited to pending/drafted/
+# approved, so a post whose only draft was already POSTED failed both branches once it aged past
+# the 14-day window and silently left the Posted tab. 539 of 693 posted threads (78%) had already
+# vanished that way, taking the record of delivered work with them. 'rejected' is deliberately not
+# here: a rejected draft means the reviewer said no, so the post has no claim on staying visible.
+_HAS_WORK = exists().where(and_(
+    Draft.post_id == Post.id,
+    Draft.status.in_(("pending", "drafted", "approved", "posted")),
+))
 _DRAFTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "drafted"))
 _APPROVED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "approved"))
 _POSTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "posted"))
@@ -76,8 +85,8 @@ _POSTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "posted"
 # accounts, my clients are flagging it").
 MAX_FEEDS_PER_POST = 2
 
-# Grandfather clause. Deliberately ANY draft, not _WORKING: _WORKING omits 'posted', so a post
-# whose comment is already live would drop out of the Posted tab the moment this rule shipped.
+# Grandfather clause: ANY draft at all, including rejected. Wider than _HAS_WORK on purpose — a
+# post the reviewer has already looked at should not be re-ranked out from under them.
 _HAS_ANY_DRAFT = exists().where(Draft.post_id == Post.id)
 
 
@@ -127,7 +136,7 @@ _VIEW_SQL = {
 
 def _visible_conditions(db: Session, client_id: int, max_age_days: int):
     """The 'is this post in the client's feed at all' rules, as SQL conditions: not dismissed,
-    fresh enough (or carrying work), above the relevance floor (or unscored/working), not written
+    fresh enough (or carrying work), above the relevance floor (or unscored/carrying work), not written
     by the client themselves or a same-company colleague, and among the top MAX_FEEDS_PER_POST
     client feeds for that post.
 
@@ -138,9 +147,9 @@ def _visible_conditions(db: Session, client_id: int, max_age_days: int):
     conds = [
         Post.client_id == client_id,
         Post.dismissed.is_(False),
-        or_(dt >= cutoff, _WORKING),
+        or_(dt >= cutoff, _HAS_WORK),
         or_(Post.relevance_score.is_(None),
-            func.round(Post.relevance_score * 10) >= _relevance_floor(), _WORKING),
+            func.round(Post.relevance_score * 10) >= _relevance_floor(), _HAS_WORK),
         _within_feed_quota(),
     ]
     client = db.get(Client, client_id)
