@@ -5,7 +5,7 @@ from app.llm._llm import AzureClient
 
 from app.config import settings
 from app.llm.humanize import humanize_comments
-from app.llm.style import HOUSE_STYLE, check_violations, has_negation_device
+from app.llm.style import HOUSE_STYLE, check_violations, has_negation_device, has_stacked_statements
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
@@ -264,7 +264,7 @@ def _self_awareness_block(profile: dict | None) -> str:
     rules = []
     if profile["curious_rate"] >= 0.06:
         rules.append("- Do NOT use the word 'Curious', and do not open by saying you are curious.")
-    if profile["q_rate"] >= 0.25:
+    if profile["q_rate"] >= 0.12:
         rules.append("- Do NOT ask the author a question this time. Make a plain statement or observation.")
     if profile["overused_openers"]:
         rules.append("- Do NOT open with any of these over-used words: "
@@ -297,7 +297,7 @@ def _draft_problems(text: str, avoid_texts: list[str] | None, profile: dict | No
             problems.append(f"opens with the over-used word '{fw}'")
         if profile["curious_rate"] >= 0.06 and "curious" in low:
             problems.append("uses 'Curious', which is over-used right now")
-        if profile["q_rate"] >= 0.25 and _is_question(text):
+        if profile["q_rate"] >= 0.12 and _is_question(text):
             problems.append("is a question, and questions are over-used right now")
     return problems
 
@@ -398,9 +398,15 @@ ADD SOMETHING. DO NOT RESTATE THE POST. Repeating a fact the post already stated
 abstract principle ("Prevention starts while people still feel healthy"), is the single thing that
 makes these comments worthless — the author already knows what they wrote, and no one replies to
 their own words handed back to them. Read the post, decide which of these it deserves, and commit:
-- Most posts squarely in her field: bring HER POSITION on the subject. A real view, from her
-  viewpoints below, that the post does not itself contain. This is the default for technical posts,
-  studies, industry news and anything that invites a view.
+- Most posts squarely in her field: add something from HER EXPERIENCE that the post does not
+  contain — what she sees in practice, what she measures, what she has watched play out. Ground it
+  in her material below. This is experience, NOT a verdict: do not rate, rank, dismiss or predict.
+  Banned outright, because they read as a hot take rather than expertise:
+    "My bet is that ...", "I'd wager", "my money is on" — never frame a view as a prediction.
+    "I cannot trust it", "I don't trust", "that tells us nothing", "that is useless" — never
+    deliver a judgement on someone else's tool, study or method.
+  She is commenting under a colleague's post, not reviewing their work. A firm stance belongs only
+  where the post explicitly asks for one.
 - A personal story, a loss, a milestone, something vulnerable, or a light everyday post: bring no
   position at all. React like a person. Warmth is the whole comment, and a stance here is intrusive.
 - A post genuinely outside her expertise: a specific, plain observation about one thing in it is
@@ -481,9 +487,11 @@ Author: {author}
    which case it needs to read as speech and not as a summary of the first. Never end on an
    abstraction or a principle — put the concrete part LAST. Vary how you connect; reaching for
    "because" every time is its own tell.
-2. COULD THEY REPLY TO THIS? The author already knows what they wrote, so a comment that hands
-   their own point back gives them nothing to answer. Leave something a person could agree with,
-   argue with, or add to."""
+2. ARE YOU JUST HANDING BACK THEIR OWN POINT? The author already knows what they wrote, so a
+   comment that repeats it adds nothing. Bring something of hers that was not in the post.
+   This is NOT an instruction to ask a question. A question is an occasional shape, not the way to
+   sound engaged, and most comments should be a statement. If the draft ends in a question mark,
+   check that a question is genuinely the best reply to THIS post rather than the easy way out."""
 
 
 def _participant_note(client: Client, post: Post) -> str:
@@ -570,6 +578,62 @@ def _hard_problems(text: str, avoid: list[str], allow_formula: bool) -> list[str
     return probs
 
 
+_FUSE_PROMPT = """This LinkedIn comment reads as separate statements bolted together rather than one
+person talking. Rewrite it so it flows.
+
+Comment: "{text}"
+
+Rules:
+- Keep every idea and every specific detail. Do not shorten it to fix it, and do not add anything new.
+- If two thoughts are really one, JOIN them into a single sentence with a real connector
+  (so / but / because / when / if / and). Vary the connector; do not reach for "because" every time.
+- If there are three ideas and the transitions feel abrupt, drop the weakest one and join the rest.
+  A comment carrying one idea well beats three stacked up.
+- Put the concrete part LAST. Never end on an abstraction or a general principle: that dead
+  generality at the end is what stops anyone replying.
+- Do not turn it into a question, and do not add an opinion, a prediction or a verdict.
+- Keep her voice and her wording wherever you can. This is a rhythm fix, not a rewrite.
+
+Examples of the fix:
+  BEFORE: "Longevity is becoming more visible in Dubai. Medical rigor and honest claims will earn lasting trust."
+  AFTER:  "Longevity is becoming more visible in Dubai but medical rigor and honest claims are what will earn lasting trust."
+  BEFORE: "Time is the one luxury we cannot store. Investing in health and quality of life is a sensible definition of longevity."
+  AFTER:  "Investing in health and quality of life is a good definition of longevity because time is a luxury we cannot store."
+
+If the comment ALREADY reads naturally as someone talking, return it completely unchanged — some
+short two-sentence replies are perfectly human ("Quite a pairing for 2027. I'm looking forward to
+seeing the New York programme you and David put together.").
+
+Respond ONLY with JSON: {{"text": "..."}}"""
+
+
+def _fuse(client: Client, text: str) -> str:
+    """Repair a comment that still reads as bolted-together statements.
+
+    This replaces a warning label on the draft card. The tool had been detecting the problem,
+    failing to fix it, and passing it to the reviewer with "AI could not get this one right" —
+    which spent the tokens, produced the comment, and then made its failure her job. It also
+    mislabelled genuinely good short replies, so she stopped trusting the ones that were fine.
+
+    One small focused call succeeds far more often than asking the full drafter to start again:
+    it sees only the sentence and has only this job, against ~4,700 words of competing rules.
+    Returns the original on any failure, so this can only help."""
+    if not text or not text.strip():
+        return text
+    try:
+        out = str(extract_json(_call(
+            settings.draft_model, _FUSE_PROMPT.format(text=text.strip()), 300, 25.0, effort="low",
+        )).get("text", "")).strip()
+    except Exception:
+        return text
+    if not out:
+        return text
+    # Never accept a repair that loses half the comment or trips the house style.
+    if len(out.split()) < 0.6 * len(text.split()) or check_violations(out):
+        return text
+    return out
+
+
 def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid: list[str],
                       voice_ex_block: str, memory_block: str, shape: str) -> str:
     """Draft once; regenerate once ONLY if it trips a hard house-style/repetition rule.
@@ -592,6 +656,10 @@ def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid:
         # comment shipped that way in the benchmark. refine_draft already compared; this didn't.
         if retry and len(_hard_problems(retry, avoid, allow)) < len(probs):
             text = retry
+    # Last resort for the one problem a regenerate keeps failing to fix. Cheap, and only fires on
+    # the ~10% of drafts that still read as bolted-together statements.
+    if has_stacked_statements(text):
+        text = _fuse(client, text)
     return text
 
 
