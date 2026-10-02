@@ -565,9 +565,6 @@ def _prediagnosis(post: Post) -> bool:
     return bool(_PREDIAG_RE.search(post.content_snippet or ""))
 
 
-def _wc(text: str) -> int:
-    return len(re.findall(r"[A-Za-z']+", text or ""))
-
 
 def _hard_problems(text: str, avoid: list[str], allow_formula: bool) -> list[str]:
     """House-style/length/repetition violations worth a regenerate. Drops the 'before symptoms'
@@ -766,6 +763,26 @@ def _refine_once(client: Client, post: Post, current_text: str, instruction: str
     return _strip_negation(out[0] if out else revised)
 
 
+# Matches the "No question" chip's own wording AND the ways an operator phrases it free-hand.
+# The first version of this missed the chip itself ("rewrite it as a PLAIN statement RATHER THAN a
+# question"), which would have shipped the button with its enforcement dead — the regex is asserted
+# against the exact chip text in the tests below for that reason.
+_NO_QUESTION_RE = re.compile(
+    r"(rather than a question|instead of a question|not a question|no question|without a question"
+    r"|as an? (plain |simple )?statement|make it a statement|don'?t ask|do not ask|stop asking"
+    r"|not end with a question mark|no question mark)", re.I)
+
+
+def _wants_no_question(instruction: str) -> bool:
+    """Did the operator ask for a statement rather than a question?
+
+    Matches the 'No question' tweak chip and any free-text instruction that says the same thing.
+    The refine prompt alone is not enough: the reviewer presses this button precisely because the
+    model reached for a question, and asking it again in the same breath often returns another
+    one — so refine_draft checks the result and retries."""
+    return bool(_NO_QUESTION_RE.search(instruction or ""))
+
+
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str,
                  avoid_texts: list[str] | None = None, voice_examples: list[str] | None = None,
                  global_texts: list[str] | None = None, sibling_texts: list[str] | None = None) -> str:
@@ -787,14 +804,23 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     if not text:
         return current_text
     probs = _hard_problems(text, gate_avoid, allow)
-    too_long = _wc(text) > 26
-    if probs or too_long:
+    # A 'No question' tweak that comes back as another question has not done its job, so treat
+    # that as a problem worth regenerating for — same as a house-style violation.
+    unmet = _wants_no_question(instruction) and _is_question(text)
+    # NO 26-word ceiling here. It existed only on this path, so pressing Tweak quietly cut a
+    # comment that the drafter was free to write at any length, and it contradicted the house
+    # style ("LENGTH: your judgement, taken from the post"). Genuine rambling is already a
+    # violation inside _hard_problems at 60 words, which is where a length rule belongs.
+    if probs or unmet:
         fix = ("Also strictly fix these: " + "; ".join(probs) + ". ") if probs else ""
-        if too_long:
-            fix += "Keep it to MAX 20 words, one or two sentences. "
+        if unmet:
+            fix += ("It must NOT be a question. Rewrite it as a plain statement that makes the same "
+                    "point, and do not end with a question mark. ")
         retry = _refine_once(client, post, current_text, (instruction + " " + fix).strip(), memory_block)
         if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
-            text = retry
+            # Never accept a retry that still asks when the operator asked it not to.
+            if not (_wants_no_question(instruction) and _is_question(retry)):
+                text = retry
     # No _tighten pass here. That forced-shortening step gets only the bare sentence and
     # "make it shorter" — no house style, no voice samples, no viewpoints, no reasoning — so it
     # reliably flattened a comment's rhythm and voice. It was removed from the draft path for

@@ -45,7 +45,10 @@ export default function PostCard({ post, onActioned }) {
     ["Warmer", "make it warmer and more empathetic and human, without any praise opener or clinical jargon"],
     ["Simpler", "say it in plain, simple language a non-expert would understand, no jargon; keep it natural, not a summary"],
     ["More personal", "make it more personal and human, in her own first-person voice"],
-    ["More neutral", "make it more neutral and less opinionated; make the point without pushing a strong personal opinion"],
+    // Replaces "More neutral", which overlapped almost entirely with "Remove opinion" below
+    // (that one is strictly stronger: it drops unverified claims too). Questions were the most
+    // common complaint from the reviewer, so the row is better spent on this.
+    ["No question", "rewrite it as a plain statement rather than a question: keep the same point and the same specific detail, say it as an observation from her own experience or practice, and do not end with a question mark"],
     ["More scientific", "make it more scientific and clinical in tone: precise, evidence-minded, measured"],
     ["More authoritative", "make it more authoritative, peer-to-peer between experts; never congratulatory, never 'well done' or 'great post'"],
     ["Remove opinion", "remove personal opinion and any unverified claim; keep only what reflects the post itself and facts grounded in her own material"],
