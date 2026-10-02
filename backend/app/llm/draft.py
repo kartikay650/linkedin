@@ -127,7 +127,19 @@ def _voice_block(client: Client) -> str:
         parts.append(head + raw)
     guide = (client.voice_guide or client.tone_profile or "").strip()
     if guide:
-        parts.append("How they write:\n" + guide)
+        # This text was extracted by brand onboarding from the client's OWN POSTS, and it was
+        # being handed to the comment drafter as if it described comments. For Dr. Joe Raffaele it
+        # says "uses rhetorical questions to open sections", "closes posts with ... an engaging
+        # question to the audience", and lists "my bet is" as one of his signature phrases — which
+        # is precisely the question rate and the hot-take framing the reviewer complained about.
+        # Four of nine clients carry rhetorical-question guidance, three carry post-closing CTAs.
+        # Take the VOICE from it; the post architecture does not transfer to a reply.
+        parts.append(
+            "How they write THEIR OWN POSTS. Take the voice from this — word choice, register, how "
+            "blunt or measured they are, what they care about. Do NOT take the POST ARCHITECTURE: "
+            "a comment under someone else's post has no opening hook, no rhetorical question to "
+            "open with, no sections, no bullets, no closing call to action and no sign-off. Where "
+            "anything here conflicts with the comment rules above, the comment rules win.\n" + guide)
     return "\n\n".join(parts) if parts else "Direct, plain, specific. No fluff."
 
 
@@ -361,10 +373,22 @@ def _plan(client: Client, post: Post, brief: str, siblings_block: str = "") -> d
 
 
 def _rules_block(client: Client) -> str:
-    """Only the HARD constraints (CTA rules + guardrails) — the knowledge itself lives in the brief."""
+    """Only the HARD constraints (CTA rules + guardrails) — the knowledge itself lives in the brief.
+
+    CTA rules are reframed rather than dropped. They describe what this person does at the end of
+    their OWN posts: DM keywords, booking links, "CTAs should invite engagement (repost, follow,
+    answer a question)". All nine clients had that fed in as a hard rule for writing a COMMENT on
+    somebody else's post, where a call to action is never appropriate. The prohibitions in there
+    are still worth keeping ("do not push consumer product purchases", "do not overstate certainty
+    on early-stage findings"), so the block keeps the text and inverts its instruction."""
     parts = []
     if (client.cta_rules or "").strip():
-        parts.append("CTA rules:\n" + client.cta_rules.strip())
+        parts.append(
+            "What they do at the end of THEIR OWN POSTS — included only for the prohibitions in "
+            "it, which still apply. A comment under someone else's post NEVER carries a call to "
+            "action, a DM keyword, a link, a booking prompt, or an invitation to engage, follow, "
+            "repost or answer a question. Ignore every instruction here telling you to invite "
+            "engagement; obey every one telling you not to do something:\n" + client.cta_rules.strip())
     if (client.guardrails or "").strip():
         parts.append("Guardrails (hard rules):\n" + client.guardrails.strip())
     return ("=== HARD RULES ===\n" + "\n\n".join(parts) + "\n=== END ===") if parts else ""
@@ -660,6 +684,58 @@ def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid:
     return text
 
 
+_UNQUESTION_PROMPT = """This is a LinkedIn comment on SOMEONE ELSE'S post, written as {name}. It is
+phrased as a question. Rewrite it as a statement.
+
+Comment: "{text}"
+
+The trap to avoid: do NOT convert the question into a claim that {name} did the thing being asked
+about, and do NOT turn it into a clinical finding presented as their experience. The work belongs to
+the person who wrote the post.
+  WRONG: "How was the 70% heart-rate target individualized?"
+      -> "My 70% heart-rate target is individualized."        (it is not theirs)
+  WRONG: "Will you address how free estradiol affects glycan patterns?"
+      -> "In my experience, free estradiol affects glycan patterns."   (invents a clinical claim)
+  RIGHT: "How was the 70% heart-rate target individualized?"
+      -> "Setting the target relative to each person's capacity is what makes this usable in a
+          frail population."
+  RIGHT: "Will you address how free estradiol affects glycan patterns?"
+      -> "The hormone side of this is the part I will be listening for."
+
+So: keep the same specific detail the question was about, and say why it matters, or what they will
+be watching for. Assert no new fact, no study, no number and no clinical result. Do not claim the
+post's work as their own. Do not add an opinion, a verdict or a prediction. Do not make it longer,
+and do not end with a question mark.
+
+Respond ONLY with JSON: {{"text": "..."}}"""
+
+
+def _unquestion(client: Client, text: str) -> str:
+    """Turn one question into a statement, keeping its point.
+
+    Used only when EVERY option for a post came back as a question. The two candidates are
+    generated in parallel and cannot see each other, so a post that invites a question gets two of
+    them — measured at 3 of 9 posts for the client the reviewer flagged, which is exactly the
+    "every second or third comment" she described. The draft-level question rate (9%) hides this
+    completely, because the failures cluster onto the same posts.
+
+    Returns the original on any failure, so the reviewer never ends up with less than she had."""
+    if not text or not text.strip():
+        return text
+    try:
+        out = str(extract_json(_call(
+            settings.draft_model,
+            _UNQUESTION_PROMPT.format(text=text.strip(), name=client.name or "them"),
+            250, 25.0,
+            effort="low",
+        )).get("text", "")).strip()
+    except Exception:
+        return text
+    if not out or _is_question(out) or check_violations(out):
+        return text
+    return out
+
+
 def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,
                     voice_examples: list[str] | None = None, global_texts: list[str] | None = None,
                     sibling_texts: list[str] | None = None) -> list[str]:
@@ -698,6 +774,14 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
     for t in results:
         if t and t not in out:
             out.append(t)
+    # Never hand the reviewer a post whose only options are both questions. The candidates run in
+    # parallel and are blind to each other, so when a post invites a question they both ask one and
+    # she is left with no alternative to pick. Convert the last one; if that fails it stays as it
+    # was, so this can only add an option, never remove one.
+    if len(out) > 1 and all(_is_question(t) for t in out):
+        fixed = _unquestion(client, out[-1])
+        if fixed and not _is_question(fixed) and fixed not in out[:-1]:
+            out[-1] = fixed
     return out
 
 
