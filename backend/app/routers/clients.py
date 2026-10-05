@@ -1,7 +1,7 @@
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -30,8 +30,13 @@ ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
 
 @router.get("", response_model=list[ClientOut])
-def list_clients(db: Session = Depends(get_db)):
-    return db.query(Client).all()
+def list_clients(include_archived: bool = Query(False), db: Session = Depends(get_db)):
+    """The dashboard sidebar. Archived clients are hidden by default — their data is all still
+    there, so this is reversible by flipping one flag."""
+    q = db.query(Client)
+    if not include_archived:
+        q = q.filter(Client.archived.is_(False))
+    return q.all()
 
 
 @router.post("", response_model=ClientOut)

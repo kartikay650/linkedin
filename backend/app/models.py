@@ -53,6 +53,11 @@ class Client(Base):
     specialty = Column(String, nullable=False)
     linkedin_url = Column(String, nullable=True)  # the client's own profile, not a watch-creator
     company = Column(String, default="")  # groups colleagues; a client never sees own/same-company posts
+    # Hidden from the dashboard sidebar without deleting anything. There was no way to stand a
+    # client down: the foreign keys from posts, client_documents, watch_creators and prospects are
+    # all NO ACTION, so removing a client means destroying their posts and drafts first, and if
+    # they come back their voice profile and creator list have to be rebuilt from scratch.
+    archived = Column(Boolean, default=False, nullable=False)
     tone_profile = Column(Text, default="")  # short doc: voice, do's/don'ts, sample phrases
     topics = Column(JSON, default=list)  # keywords/hashtags to search
     burner_id = Column(Integer, ForeignKey("burners.id"), nullable=True)
