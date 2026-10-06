@@ -245,6 +245,11 @@ class Post(Base):
     # quota's own subquery, and stamping means the change applies only to posts fetched from now on
     # — existing rows stay false, so nothing is retroactively re-ranked into anyone's queue.
     is_priority = Column(Boolean, default=False, nullable=False)
+    # Two-letter code from app.lang.detect_language, stamped when the post is saved. Several
+    # tracked creators post in German, French, Dutch, Spanish or Italian; those reached the queue
+    # and the tool drafted comments in that language. Defaults to "en" so a row that predates this
+    # column, or one whose detection somehow failed, stays visible rather than silently vanishing.
+    language = Column(String, default="en", nullable=False)
     content_snippet = Column(Text, default="")
     posted_at = Column(DateTime, nullable=True)
     engagement = Column(JSON, default=dict)  # {"likes": n, "comments": n}

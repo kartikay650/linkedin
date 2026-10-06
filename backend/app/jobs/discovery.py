@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.llm.relevance import score_post
 from app.models import Client, Creator, CreatorClient, Post, WatchCreator
+from app.lang import detect_language
 from app.profiles import is_own_or_colleague_post, profile_slug
 from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
 
@@ -276,6 +277,7 @@ def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -
         posted_at=raw.get("posted_at"),
         engagement=raw.get("engagement", {}),
         is_priority=_is_priority_creator(db, client.id, source_ref),
+        language=detect_language(raw.get("content_snippet") or ""),
     )
     db.add(post)
     try:

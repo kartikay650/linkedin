@@ -144,6 +144,11 @@ def _visible_conditions(db: Session, client_id: int, max_age_days: int):
         Post.client_id == client_id,
         Post.dismissed.is_(False),
         or_(dt >= cutoff, _HAS_WORK),
+        # English only. A comment drafted in German under a German post is not something any
+        # client will post, so these are noise in the queue. _HAS_WORK is the escape hatch: a post
+        # somebody already drafted or posted on stays visible whatever language it is in, so this
+        # can never retroactively hide delivered work.
+        or_(Post.language == "en", Post.language.is_(None), _HAS_WORK),
         or_(Post.relevance_score.is_(None),
             func.round(Post.relevance_score * 10) >= _relevance_floor(), _HAS_WORK),
         _within_feed_quota(),
