@@ -182,6 +182,7 @@ class DraftOut(BaseModel):
     post_id: int
     variant_index: int
     text: str
+    original_text: Optional[str] = None
     edited_text: Optional[str]
     provenance: list[dict] = []
     quality_note: Optional[str] = None

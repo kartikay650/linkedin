@@ -211,6 +211,25 @@ def has_formula(text: str) -> bool:
     return any(r.search(text or "") for r in _FORMULA_RES)
 
 
+# "I would measure/add/track/compare ..." — advice in the conditional, which is still advice. It
+# reads as telling the author how to do their own work, and it is the most common opinionated tell
+# left: 7% of drafts, highest on the client the reviewers flagged. Unlike the question tell, the
+# Tweak button does not rewrite this one, so that 7% is a real measurement rather than a count of
+# survivors. Present tense about her own practice is what the write rules ask for instead
+# ("I measure", "I start with"), so only the conditional is matched here.
+_CONDITIONAL_ADVICE_RE = re.compile(
+    r"\bI(?:\s+would|'d|\u2019d)\s+(measure|add|track|compare|use|want|look|start|check|run|"
+    r"test|build|include|frame|push|focus|prioriti[sz]e|flag|watch|scrutini[sz]e|keep)\b"
+    # "I want organ-specific measures to ..." is the same move with a different verb. The
+    # negative lookahead keeps the harmless "I want to see more of this" out of it.
+    r"|\bI want\s+(?!to\b)", re.I)
+
+
+def has_conditional_advice(text: str) -> bool:
+    """True when the comment tells the author what it would do with their work."""
+    return bool(_CONDITIONAL_ADVICE_RE.search(text or ""))
+
+
 def has_stacked_statements(text: str) -> bool:
     """Two or more sentences with no comma anywhere: the shape the owner identified as the reason
     these read as machine-written ("the first sentence is doing fine, the second is where it gets
@@ -240,6 +259,9 @@ def check_violations(text: str) -> list[str]:
     # at a higher altitude. Validated against every comment she has actually judged: this fires on
     # 6 of the 7 she rejected and 0 of the 8 she approved (the 7th is caught by the name-sign-off
     # rule). The humanizer fuses these before the gate sees them; this is the backstop.
+    if has_conditional_advice(t):
+        v.append("conditional advice ('I would ...') — say it in the present tense about her own "
+                 "practice, or leave it out")
     if has_stacked_statements(t):
         v.append("stacked statements — fuse them into one sentence with a connector")
     if has_formula(t):

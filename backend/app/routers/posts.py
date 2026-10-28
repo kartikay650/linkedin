@@ -447,7 +447,8 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
         # comment still reads as bolted-together statements, so the fix happens instead of being
         # handed to the reviewer as "AI could not get this one right". The label also misfired on
         # genuinely good short replies, which cost more trust than it saved.
-        draft = Draft(post_id=post.id, variant_index=i, text=text, provenance=provenance)
+        draft = Draft(post_id=post.id, variant_index=i, text=text, original_text=text,
+                      provenance=provenance)
         db.add(draft)
         created.append(draft)
     db.commit()
@@ -482,6 +483,8 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
             revised = safer
             provenance = annotate_provenance(post.client, post, revised, docs_text)
     draft.text = revised
+    # original_text is deliberately NOT touched here. It is the only record of what the tool
+    # actually produced, and this line is what used to destroy it.
     draft.edited_text = None  # revised text supersedes prior manual edits
     draft.provenance = provenance
     db.commit()

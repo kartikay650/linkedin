@@ -272,6 +272,15 @@ class Draft(Base):
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
     variant_index = Column(Integer, default=0)
     text = Column(Text, nullable=False)
+    # The text EXACTLY as the tool first generated it. Written once, never updated.
+    #
+    # `text` is not a record of what the tool produced: the Tweak path overwrites it
+    # (routers/posts.py sets draft.text = revised) and Regenerate deletes the row outright. So
+    # every time a reviewer pressed "No question", the question it fixed vanished, and any
+    # question rate measured off `text` counted only the ones nobody bothered to fix — the harder
+    # the button was used, the better the tool scored. Reported as questions on "every second or
+    # third comment" while the table read 3%, and the table was the thing that was wrong.
+    original_text = Column(Text, nullable=True)
     edited_text = Column(Text, nullable=True)
     # Clinical-safety trace: [{text, level: grounded|general|unverified, note, source_url}]
     provenance = Column(JSON, default=list)

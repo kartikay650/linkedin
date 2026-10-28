@@ -429,6 +429,11 @@ their own words handed back to them. Read the post, decide which of these it des
     "My bet is that ...", "I'd wager", "my money is on" — never frame a view as a prediction.
     "I cannot trust it", "I don't trust", "that tells us nothing", "that is useless" — never
     deliver a judgement on someone else's tool, study or method.
+    "I would measure ...", "I would add ...", "I would track ...", "I'd compare ..." — this is
+    the most common one and it reads as telling the author how to do their work. It is advice in
+    the conditional, which is still advice. If she genuinely does the thing, say so in the
+    PRESENT tense about her own practice ("I measure ...", "I start with ...", "I look for ...").
+    If she does not actually do it, do not say it at all.
   She is commenting under a colleague's post, not reviewing their work. A firm stance belongs only
   where the post explicitly asks for one.
 - A personal story, a loss, a milestone, something vulnerable, or a light everyday post: bring no
