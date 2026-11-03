@@ -13,10 +13,10 @@ from app.llm.draft import (TWEAK_CHIPS, angle_draft, generate_drafts, refine_dra
                            strip_unverifiable)
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
 from app.llm.style import check_violations
-from app.models import Client, ClientDocument, Draft, Post, TweakEvent
+from app.models import Client, ClientDocument, Draft, Post, TweakEvent, text_hash
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
 from app.scraper.apify_client import account_usage
-from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
+from app.schemas import DraftOut, DraftUpdate, ManualDraftRequest, PostWithDrafts, RefineDraftRequest
 
 router = APIRouter(tags=["posts"])
 
@@ -370,6 +370,7 @@ def _approved_examples(db: Session, post: Post) -> list[str]:
         db.query(Draft.text, Draft.edited_text)
         .join(Post, Post.id == Draft.post_id)
         .filter(Post.client_id == post.client_id, Draft.post_id != post.id,
+                Draft.source == "generated",
                 Draft.status.in_(["approved", "posted"]), Draft.edited_text.isnot(None))
         .order_by(Draft.created_at.desc()).limit(60).all()
     )
@@ -401,17 +402,19 @@ def _draft_context(db: Session, post: Post):
     recent and global are read from original_text, what the tool actually wrote. `text` is
     overwritten by every Tweak, so a question that the reviewer removed with "No question" vanished
     from the pattern stats the drafter uses to stop repeating itself, and the tool never learned it
-    was over-asking. Rows from before original_text existed fall back to text."""
+    was over-asking. Rows from before original_text existed fall back to text. Comments a reviewer
+    wrote by hand are not the tool's output, so they are left out of both."""
     wrote = func.coalesce(Draft.original_text, Draft.text)
     recent = [
         r[0] for r in db.query(wrote)
         .join(Post, Post.id == Draft.post_id)
-        .filter(Post.client_id == post.client_id, Draft.post_id != post.id)
+        .filter(Post.client_id == post.client_id, Draft.post_id != post.id,
+                Draft.source == "generated")
         .order_by(Draft.created_at.desc()).limit(20).all()
     ]
     global_recent = [
         r[0] for r in db.query(wrote)
-        .filter(Draft.post_id != post.id)
+        .filter(Draft.post_id != post.id, Draft.source == "generated")
         .order_by(Draft.created_at.desc()).limit(40).all()
     ]
     approved = _approved_examples(db, post)
@@ -490,9 +493,11 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
-    # Replace any existing non-posted drafts so regenerating never stacks up copies.
+    # Replace any existing non-posted GENERATED drafts so regenerating never stacks up copies. A
+    # comment the reviewer wrote by hand is kept: Regenerate is a request for new tool options,
+    # never for deleting her own writing.
     for d in list(post.drafts):
-        if d.status != "posted":
+        if d.status != "posted" and d.source != "manual":
             db.delete(d)
     db.flush()
 
@@ -521,7 +526,7 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
         # handed to the reviewer as "AI could not get this one right". The label also misfired on
         # genuinely good short replies, which cost more trust than it saved.
         draft = Draft(post_id=post.id, variant_index=i, text=text, original_text=text,
-                      provenance=provenance)
+                      provenance=provenance, provenance_hash=text_hash(text))
         db.add(draft)
         created.append(draft)
     db.commit()
@@ -547,6 +552,8 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
         raise HTTPException(422, "say how to change it, or pick a tweak")
     if draft.status == "posted":
         raise HTTPException(409, "this comment is already posted on LinkedIn")
+    if draft.source == "manual":
+        raise HTTPException(409, "this comment was written by hand; edit it directly")
     post = db.get(Post, draft.post_id)
     current = draft.edited_text or draft.text
     # Same anti-repetition context as a fresh draft, so a Tweak is fully guarded too (no more
@@ -567,6 +574,7 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
     # actually produced, and this line is what used to destroy it.
     draft.edited_text = None  # revised text supersedes prior manual edits
     draft.provenance = provenance
+    draft.provenance_hash = text_hash(revised)
     db.commit()
     db.refresh(draft)
     return draft
@@ -582,6 +590,8 @@ def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "draft not found")
     if draft.status == "posted":
         raise HTTPException(409, "this comment is already posted on LinkedIn")
+    if draft.source == "manual":
+        raise HTTPException(409, "this comment was written by hand; edit it directly")
     post = db.get(Post, draft.post_id)
     current = draft.edited_text or draft.text
     taken = [current, draft.text, draft.original_text] + [
@@ -600,6 +610,67 @@ def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
     draft.original_text = text
     draft.edited_text = None
     draft.provenance = provenance
+    draft.provenance_hash = text_hash(text)
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+# One fact-check call on its own serverless invocation: no retry, so a slow check can't cross the
+# 60s limit. A timeout fails closed (shown as "safety check did not run").
+_LONE_CHECK_TIMEOUT = 25.0
+_MANUAL_MAX_CHARS = 3000
+
+
+@router.post("/posts/{post_id}/manual-draft", response_model=DraftOut)
+def manual_draft(post_id: int, payload: ManualDraftRequest, db: Session = Depends(get_db)):
+    """Save a comment the reviewer wrote herself ("Write my own").
+
+    Saved BEFORE it is fact-checked, carrying the fail-closed "safety check did not run" marker,
+    so her text is never lost to a slow check and never shows as checked when it wasn't. Then one
+    bounded check replaces the marker. Never passed to strip_unverifiable: the tool does not
+    rewrite a human's comment, it only flags what in it would need checking. original_text stays
+    empty because the tool wrote none of it."""
+    post = db.get(Post, post_id)
+    if not post:
+        raise HTTPException(404, "post not found")
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(422, "write the comment first")
+    if len(text) > _MANUAL_MAX_CHARS:
+        raise HTTPException(422, f"that's longer than a LinkedIn comment should be ({_MANUAL_MAX_CHARS} characters max)")
+    used = [d.variant_index or 0 for d in post.drafts]
+    draft = Draft(post_id=post.id, variant_index=(max(used) + 1) if used else 0, text=text,
+                  original_text=None, source="manual", status="pending",
+                  provenance=[{"text": text, "level": "unverified", "note": CHECK_FAILED_NOTE,
+                               "source_url": ""}])
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+    provenance = annotate_provenance(post.client, post, text, _docs_text(db, post.client_id),
+                                     timeout=_LONE_CHECK_TIMEOUT, max_retries=0)
+    draft.provenance = provenance
+    if not any(CHECK_FAILED_NOTE in (s.get("note") or "") for s in provenance):
+        draft.provenance_hash = text_hash(text)
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+@router.post("/drafts/{draft_id}/recheck", response_model=DraftOut)
+def recheck_draft(draft_id: int, db: Session = Depends(get_db)):
+    """Re-run the fact-check on the text the card shows now, after an edit. Flags only: an edited
+    comment is human text, so nothing here rewrites it."""
+    draft = db.get(Draft, draft_id)
+    if not draft:
+        raise HTTPException(404, "draft not found")
+    post = db.get(Post, draft.post_id)
+    shown = draft.edited_text or draft.text
+    provenance = annotate_provenance(post.client, post, shown, _docs_text(db, post.client_id),
+                                     timeout=_LONE_CHECK_TIMEOUT, max_retries=0)
+    draft.provenance = provenance
+    if not any(CHECK_FAILED_NOTE in (s.get("note") or "") for s in provenance):
+        draft.provenance_hash = text_hash(shown)
     db.commit()
     db.refresh(draft)
     return draft
@@ -649,8 +720,10 @@ def delete_draft(draft_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@router.patch("/drafts/{draft_id}", response_model=None)
+@router.patch("/drafts/{draft_id}", response_model=DraftOut)
 def update_draft(draft_id: int, payload: DraftUpdate, db: Session = Depends(get_db)):
+    """Save an edit and/or a status. Returns the draft, so the card learns straight away whether
+    the saved edit has left its fact-check stale."""
     draft = db.get(Draft, draft_id)
     if not draft:
         raise HTTPException(404, "draft not found")
@@ -668,4 +741,5 @@ def update_draft(draft_id: int, payload: DraftUpdate, db: Session = Depends(get_
                 db.delete(sib)
 
     db.commit()
-    return {"ok": True}
+    db.refresh(draft)
+    return draft

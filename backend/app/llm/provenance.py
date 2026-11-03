@@ -97,9 +97,12 @@ Respond ONLY with JSON:
 {{"segments": [{{"text": "...", "level": "grounded|general|unverified", "note": "..."}}]}}"""
 
 
-def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str = "") -> list[dict]:
+def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str = "",
+                        timeout: float = 35.0, max_retries: int = 1) -> list[dict]:
+    """`timeout`/`max_retries` are lowered by the routes that run this alone on a serverless call
+    (a hand-written comment, a re-check), where one slow retry would cross the 60s limit."""
     try:
-        message = _client.with_options(max_retries=1, timeout=35.0).messages.create(
+        message = _client.with_options(max_retries=max_retries, timeout=timeout).messages.create(
             # Classification pass (grounded / general / unverified) — runs on the fast Haiku model,
             # not the drafting Sonnet, so it adds little to the draft route's latency. Haiku doesn't
             # default to thinking, so no thinking flag needed.

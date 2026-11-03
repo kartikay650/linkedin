@@ -294,10 +294,34 @@ class Draft(Base):
     # triggering.
     quality_note = Column(Text, nullable=True)
     status = Column(Enum(DraftStatus), default=DraftStatus.pending)
+    # "generated" by the tool, or "manual": written by a reviewer from scratch with "Write my own".
+    # A manual comment is never rewritten by the tool (Tweak and Different angle refuse it, and
+    # Regenerate leaves it alone), never fed to strip_unverifiable, and never counted as the
+    # tool's own output in the anti-repetition stats.
+    source = Column(String(16), nullable=False, default="generated", server_default="generated")
+    # sha1 of the exact text the fact-check (`provenance`) was run on. Edits were never
+    # re-checked, so the card kept showing "Nothing to verify" for a sentence the reviewer had just
+    # typed in. Comparing this against the text now shown is how the card knows the check is stale.
+    provenance_hash = Column(String(40), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
     post = relationship("Post", back_populates="drafts")
+
+    @property
+    def provenance_stale(self) -> bool:
+        """True when the text on the card is not the text the fact-check ran on."""
+        shown = self.edited_text or self.text or ""
+        if self.provenance_hash:
+            return self.provenance_hash != text_hash(shown)
+        # Rows from before the hash existed: every tool path checked `text`, so the check is stale
+        # exactly when a saved edit differs from it.
+        return bool(self.edited_text) and " ".join(self.edited_text.split()) != " ".join((self.text or "").split())
+
+
+def text_hash(text: str) -> str:
+    import hashlib
+    return hashlib.sha1(" ".join((text or "").split()).encode("utf-8")).hexdigest()
 
 
 class TweakEvent(Base):

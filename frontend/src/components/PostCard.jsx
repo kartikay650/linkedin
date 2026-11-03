@@ -34,6 +34,13 @@ export default function PostCard({ post, onActioned }) {
   const [noteText, setNoteText] = useState({});
   const [savingNote, setSavingNote] = useState(null);
   const [savedId, setSavedId] = useState(null);
+  // "Write my own": nothing is saved until she presses Save, so an abandoned composer leaves no row.
+  const [composing, setComposing] = useState(false);
+  const [composeText, setComposeText] = useState("");
+  const [savingManual, setSavingManual] = useState(false);
+  // Whether the fact-check on a card still matches its text, after an edit saved here.
+  const [staleByDraft, setStaleByDraft] = useState({});
+  const [rechecking, setRechecking] = useState(null);
 
   // Drafts still being worked: generated (pending), moved to draft, or approved — not posted/rejected.
   const workingDrafts = post.drafts.filter((d) => ["pending", "drafted", "approved"].includes(d.status));
@@ -105,7 +112,9 @@ export default function PostCard({ post, onActioned }) {
   const handleSaveEdit = async (draft) => {
     const text = editedText[draft.id] ?? draft.edited_text ?? draft.text;
     try {
-      await api.updateDraft(draft.id, { edited_text: text });
+      const updated = await api.updateDraft(draft.id, { edited_text: text });
+      // An edit can add a claim the fact-check never saw, so the card says when it is stale.
+      setStaleByDraft((prev) => ({ ...prev, [draft.id]: !!updated?.provenance_stale }));
       setSavedId(draft.id);
       setTimeout(() => setSavedId((cur) => (cur === draft.id ? null : cur)), 1600);
       // Text-only change: the textarea already shows it, so nothing needs refetching.
@@ -154,6 +163,86 @@ export default function PostCard({ post, onActioned }) {
       setDismissing(false);
     }
   };
+
+  const handleManualSave = async () => {
+    const text = composeText.trim();
+    if (!text) return;
+    setSavingManual(true);
+    try {
+      const draft = await api.manualDraft(post.id, text);
+      setComposing(false);
+      setComposeText("");
+      onActioned("draftAdded", draft);
+    } catch (e) {
+      toast(`Couldn't save your comment: ${e.message}. Try again.`);
+    } finally {
+      setSavingManual(false);
+    }
+  };
+
+  const handleRecheck = async (draftId) => {
+    setRechecking(draftId);
+    try {
+      const updated = await api.recheckDraft(draftId);
+      setProvByDraft((prev) => ({ ...prev, [draftId]: updated.provenance || [] }));
+      setStaleByDraft((prev) => ({ ...prev, [draftId]: !!updated.provenance_stale }));
+    } catch (e) {
+      toast(`Couldn't re-check that comment: ${e.message}. Try again.`);
+    } finally {
+      setRechecking(null);
+    }
+  };
+
+  const composer = (
+    <div style={{ marginTop: 10, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", marginBottom: 6 }}>Your own comment</div>
+      <textarea
+        rows={3}
+        autoFocus
+        value={composeText}
+        disabled={savingManual}
+        onChange={(e) => setComposeText(e.target.value)}
+        placeholder="Write the comment as you'd post it…"
+        style={{ width: "100%", border: "1px solid var(--border)", borderRadius: 6, padding: 8, resize: "vertical", fontSize: 14, lineHeight: 1.5 }}
+      />
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+        Saved as an option for this post and fact-checked like any other. The tool never rewrites it.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <button
+          onClick={handleManualSave}
+          disabled={savingManual || !composeText.trim()}
+          style={{
+            padding: "6px 12px", borderRadius: 6, border: "none", background: "var(--success)", color: "#fff",
+            fontSize: 13, fontWeight: 600, opacity: savingManual || !composeText.trim() ? 0.55 : 1,
+          }}
+        >
+          {savingManual ? "Saving and checking…" : "Save"}
+        </button>
+        <button
+          onClick={() => { setComposing(false); setComposeText(""); }}
+          disabled={savingManual}
+          style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", fontSize: 13 }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+
+  const writeOwnButton = (
+    <button
+      onClick={() => setComposing(true)}
+      disabled={drafting}
+      title="Write the comment yourself instead of using a generated one"
+      style={{
+        padding: "8px 14px", borderRadius: 6, border: "1px solid var(--primary)",
+        background: "var(--surface)", color: "var(--primary)", fontSize: 13, fontWeight: 600,
+      }}
+    >
+      Write my own
+    </button>
+  );
 
   const handleVerify = async (draftId) => {
     setVerifying(draftId);
@@ -291,21 +380,24 @@ export default function PostCard({ post, onActioned }) {
       )}
 
       {workingDrafts.length === 0 && !postedDraft && (
-        <button
-          onClick={handleDraftReply}
-          disabled={drafting}
-          style={{
-            padding: "8px 14px",
-            borderRadius: 6,
-            border: "none",
-            background: drafting ? "#93b4f8" : "var(--primary)",
-            color: "white",
-            fontSize: 13,
-            fontWeight: 600,
-          }}
-        >
-          {drafting ? "Drafting…" : "Draft reply"}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            onClick={handleDraftReply}
+            disabled={drafting}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 6,
+              border: "none",
+              background: drafting ? "#93b4f8" : "var(--primary)",
+              color: "white",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {drafting ? "Drafting…" : "Draft reply"}
+          </button>
+          {!composing && writeOwnButton}
+        </div>
       )}
 
       {workingDrafts.length > 1 && (
@@ -320,6 +412,7 @@ export default function PostCard({ post, onActioned }) {
           const shown = editedText[draft.id] ?? draft.edited_text ?? draft.text;
           const dirty = shown !== (draft.edited_text ?? draft.text);
           const edited = !!(draft.edited_text && draft.edited_text !== draft.text);
+          const manual = draft.source === "manual";
           return (
           <div
             key={draft.id}
@@ -332,9 +425,10 @@ export default function PostCard({ post, onActioned }) {
               marginTop: 10,
             }}
           >
-            {workingDrafts.length > 1 && (
+            {(workingDrafts.length > 1 || manual) && (
               <div style={{ fontSize: 12, fontWeight: 700, color: STAGES[draftStage(draft)].color, marginBottom: 8 }}>
-                Option {idx + 1}
+                {workingDrafts.length > 1 ? `Option ${idx + 1}` : ""}
+                {manual && <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>{workingDrafts.length > 1 ? " · " : ""}Written by hand</span>}
               </div>
             )}
             <textarea
@@ -361,7 +455,9 @@ export default function PostCard({ post, onActioned }) {
                 : "You can edit this text directly, then Save edit."}
             </div>
 
-            {/* Tweak row: quick chips + free-text instruction */}
+            {/* Tweak row: quick chips + free-text instruction. Not on a hand-written comment: the
+                tool never rewrites a human's text (the server refuses it too). */}
+            {!manual && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
               {TWEAKS.map(([label, chip]) => (
                 <button
@@ -396,12 +492,16 @@ export default function PostCard({ post, onActioned }) {
                 {refining === draft.id ? "Tweaking…" : "Tweak"}
               </button>
             </div>
+            )}
 
 
             <ProvenancePanel
               segments={provByDraft[draft.id] ?? draft.provenance}
               verifying={verifying === draft.id}
               onVerify={() => handleVerify(draft.id)}
+              stale={staleByDraft[draft.id] ?? draft.provenance_stale}
+              rechecking={rechecking === draft.id}
+              onRecheck={() => handleRecheck(draft.id)}
             />
 
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
@@ -435,10 +535,11 @@ export default function PostCard({ post, onActioned }) {
               >
                 {copiedId === draft.id ? "Copied ✓" : "Copy"}
               </button>
+              {!manual && (
               <button
                 onClick={handleDraftReply}
                 disabled={drafting || refining === draft.id}
-                title="Generate a fresh reply"
+                title="Generate fresh options (a comment you wrote yourself is kept)"
                 style={{
                   padding: "6px 12px",
                   borderRadius: 6,
@@ -450,6 +551,7 @@ export default function PostCard({ post, onActioned }) {
               >
                 {drafting ? "Regenerating…" : "Regenerate"}
               </button>
+              )}
               {draft.status === "pending" && (
                 <button
                   onClick={() => handleStatus(draft, "drafted")}
@@ -554,7 +656,7 @@ export default function PostCard({ post, onActioned }) {
                 <textarea
                   rows={2}
                   autoFocus
-                  placeholder="e.g. Don't open with a question. Keep it under two sentences. Never mention supplements."
+                  placeholder="e.g. Don't open with a question. Never mention supplements."
                   value={noteText[draft.id] || ""}
                   onChange={(e) => setNoteText((p) => ({ ...p, [draft.id]: e.target.value }))}
                   style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 6, padding: 8, fontSize: 13, lineHeight: 1.5, resize: "vertical", fontFamily: "inherit" }}
@@ -586,8 +688,32 @@ const Dot = ({ c }) => (
 
 // Clinical-safety trace, briefly: one status line, then only the claims that need
 // a look. Grounded/general points aren't listed — the reassurance is the summary.
-function ProvenancePanel({ segments, verifying, onVerify }) {
+function ProvenancePanel({ segments, verifying, onVerify, stale, rechecking, onRecheck }) {
   if (!Array.isArray(segments) || segments.length === 0) return null;
+  // The check ran on an earlier version of this text. Say so instead of showing a result that no
+  // longer applies: an edit is exactly where a new claim gets typed in.
+  if (stale) {
+    return (
+      <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
+        <Dot c="#f79009" />Edited since the fact-check.
+        {rechecking ? (
+          <span style={{ marginLeft: 8, fontStyle: "italic" }}>checking…</span>
+        ) : onRecheck && (
+          <button
+            onClick={onRecheck}
+            title="Fact-check the text as it is now"
+            style={{
+              marginLeft: 8, padding: "1px 8px", fontSize: 11, cursor: "pointer",
+              border: "1px solid var(--primary)", borderRadius: 6,
+              background: "transparent", color: "var(--primary)", fontWeight: 600,
+            }}
+          >
+            Re-check
+          </button>
+        )}
+      </div>
+    );
+  }
   const flagged = segments.filter((s) => s.level === "unverified" || s.level === "contradicted");
   const grounded = segments.filter((s) => s.level === "grounded").length;
   // A claim is still "unchecked" until we've run a web search on it.
@@ -596,7 +722,7 @@ function ProvenancePanel({ segments, verifying, onVerify }) {
   if (flagged.length === 0) {
     return (
       <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
-        <Dot c="#12b76a" />Grounded in her material. Nothing to verify.
+        <Dot c="#12b76a" />Grounded in their material. Nothing to verify.
       </div>
     );
   }
@@ -637,6 +763,10 @@ function ProvenancePanel({ segments, verifying, onVerify }) {
           </div>
         );
       })}
+
+      {/* "Write my own" sits under the options, and is the only way to start one when options exist. */}
+      {workingDrafts.length > 0 && !composing && <div style={{ marginTop: 10 }}>{writeOwnButton}</div>}
+      {composing && composer}
     </div>
   );
 }

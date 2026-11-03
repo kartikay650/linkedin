@@ -118,8 +118,18 @@ export default function Dashboard() {
       return;
     }
     if (kind === "drafts" && Array.isArray(payload)) {
-      // newly generated options come back from the API — no need to re-download the page
-      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, drafts: payload } : p)));
+      // newly generated options come back from the API — no need to re-download the page.
+      // Regenerate replaces only the generated options: a hand-written comment and a posted one
+      // stay on the server, so they stay on the card too.
+      setPosts((prev) => prev.map((p) => (p.id === postId
+        ? { ...p, drafts: [...p.drafts.filter((d) => d.source === "manual" || d.status === "posted"), ...payload] }
+        : p)));
+      refreshBadges();
+      return;
+    }
+    if (kind === "draftAdded" && payload) {
+      // "Write my own": one new option, added alongside whatever is already there
+      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, drafts: [...p.drafts, payload] } : p)));
       refreshBadges();
       return;
     }

@@ -187,9 +187,15 @@ class DraftOut(BaseModel):
     provenance: list[dict] = []
     quality_note: Optional[str] = None
     status: str
+    source: str = "generated"
+    provenance_stale: bool = False
 
     class Config:
         from_attributes = True
+
+
+class ManualDraftRequest(BaseModel):
+    text: str
 
 
 class DraftUpdate(BaseModel):

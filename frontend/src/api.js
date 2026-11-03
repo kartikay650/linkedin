@@ -67,6 +67,9 @@ export const api = {
     request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify(body) }),
   angleDraft: (draftId) =>
     request(`/drafts/${draftId}/angle`, { method: "POST" }),
+  manualDraft: (postId, text) =>
+    request(`/posts/${postId}/manual-draft`, { method: "POST", body: JSON.stringify({ text }) }),
+  recheckDraft: (draftId) => request(`/drafts/${draftId}/recheck`, { method: "POST" }),
   verifyClaims: (draftId) => request(`/drafts/${draftId}/verify-claims`, { method: "POST" }),
   syncClient: (clientId) => request(`/clients/${clientId}/sync`, { method: "POST" }),
   syncPlan: (clientId, force = false) =>

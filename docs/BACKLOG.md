@@ -13,6 +13,11 @@ failure. The items being built now (Phases 0, 1, 3 and 4) are in the git history
   If she does, exclude paste-marked edits and whole replacements (compare against
   `original_text`) before any of them become examples. Add a `, Name.` sign-off detector first:
   56 of Silvana's 161 posted edits end that way.
+  Phase 1 already shows the drafter up to five human-edited comments per client, but skips
+  paste-marked ones and anything with a `, Name.` sign-off. Two things wait on the same answer:
+  whether paste-marked edits can be used, and whether comments written with "Write my own"
+  (`drafts.source = 'manual'`) should be used. Today they are excluded from both the examples
+  and the repetition stats.
 - **Narrow the stacked-statement gate.** It fires on 12% of posted human edits and on 2 of Lara
   Hemeryck's own GOOD benchmark lines. It encodes Lara's diagnosis, so narrowing it is her call.
 - **Alejandro Bataller and Alex Brogan.** Both were moved to `kind='prospect'`, which stops
