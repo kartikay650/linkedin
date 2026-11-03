@@ -52,6 +52,24 @@ failure. The items being built now (Phases 0, 1, 3 and 4) are in the git history
 - **Per-author cap.** A post reaches at most 2 client feeds, but a prolific author still sees
   most of the roster across different posts.
 
+## Watch after the Phase 1-4 deploy
+
+From the 9-post before/after benchmark (3 Nov 2026), things that improved but are not settled:
+- **Length.** New comments average 17 words against 22 for Maria's posted edits (31 before).
+  Deletion-first repair is the likely cause. Watch for the clipped one-liner the owner rejected.
+  The fix would be removing pressure, never adding a length target.
+- **Two unjoined sentences.** 3 of 18 options, e.g. "Biomarkers only go so far. The number has
+  to matter to the patient in front of you." The repair now leaves a pair alone when each sentence
+  does its own work, which is also the shape of two of Lara's GOOD benchmark lines. If the owner
+  wants every such pair joined or cut, that is a one-line change to _FUSE_PROMPT.
+- **Questions.** 3 of 18 options, never both options on one post.
+- **Pronouncements still slip through** ("Peptides need clinical discipline...", "Every compound
+  needs its WADA status..."). HOUSE_STYLE bans them; nothing detects them.
+- **Dr. Joe's options read abstract** ("Named levers and measurable readouts give partners a
+  rigorous way..."). Self-insertion is gone; warmth didn't replace it.
+- `tweak_events` now logs every chip press with the text moved away from: read it after a week to
+  see which chips reviewers actually use.
+
 ## Housekeeping
 
 - **Database growth.** `posts` stores each scraped post about 4.2x (6.5x for Oct-Nov), with full
