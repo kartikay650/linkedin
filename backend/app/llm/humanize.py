@@ -14,8 +14,9 @@ from app.llm.utils import extract_json
 _client = AzureClient()
 
 PROMPT = """Rewrite each of these LinkedIn comment drafts so it reads like a real person typed it, not an AI. \
-Keep each one SHORT (1-3 sentences), keep its core point and any specific detail/number/mechanism it cites, and \
-do not add new claims, statistics, or anecdotes.
+Never make a draft longer than it is. Keep its core point and any specific detail/number/mechanism it cites, and \
+do not add new claims, statistics, or anecdotes. You may cut an explanatory clause, or a sentence that repeats \
+another; you may not add one.
 
 Remove these AI tells (from the "signs of AI writing" guide):
 - Em dash as a crutch — use a period or comma like people do. At most one em dash across all drafts.
@@ -38,14 +39,12 @@ Also remove these LinkedIn-comment tells specifically:
   BAD: "The gap between feeling alive and merely being alive is something most health frameworks don't measure."
   GOOD: "Most health metrics stop at alive and never get near what it means to actually feel good."
   BAD: "The question of whether we're reducing weight or improving metabolic function is one that applies well beyond PCOS."
-  GOOD: "Weight loss and metabolic health are not the same thing, and it shows up way beyond PCOS."
+  GOOD: "Losing weight and fixing metabolic health get mixed up well beyond PCOS."
   BAD: "That gap between a p-value and a person is where most of my job happens."
-  GOOD: "Physicians remember the one patient whose result made no sense on paper. That's usually when the science starts to matter to them."
+  GOOD: "Physicians remember the one patient whose result made no sense on paper, and that's usually when the science starts to matter to them."
 - "Reminder" framing ("powerful reminder", "serves as a reminder"), rarity flattery ("rare to see", "so refreshing"), abstract gratitude ("thanks for these valuable insights").
 
-GOLDEN RULE: react to the SUBJECT of the post, not to the post itself or how it was written. Pick ONE specific thing from the post. If the comment could sit under any post in this niche, rewrite it so it only makes sense under this one.
-
-Keep it specific and in her voice, but do NOT change how opinionated or how scientific each draft is: if a draft \
+Keep each draft in this person's voice, and do NOT change how opinionated or how scientific it is: if a draft \
 is a warm, personal, or simply curious reply, keep it that way — do not make it more assertive, do not add a stance \
 or opinion it doesn't already have, and do not turn it analytical. When a draft DOES take a position, keep it \
 committed, not hedged into mush. BUT do not sound more certain than the science: these are scientists and the field is rarely black-and-white. \
@@ -54,22 +53,16 @@ Cut absolutes and false precision ("exactly", "almost exactly", "matches it exac
 an AI tic; state the point plainly, and only hedge when genuinely needed, varying the words. Also remove the over-used \
 "[X] shows up / appears in [the body / your markers] [years / decades] before [symptoms / a diagnosis / a scan]" \
 construction — say the underlying idea a different way or drop it. Nuance means not overstating the evidence, not \
-sprinkling hedge words. Do not shorten it and do not cut anything to hit a word count — the length was chosen for this post. \
-BUT DO FIX STACKED STATEMENTS. This is the single thing that makes our comments read as machine-written. \
-When a draft is two short statements with a full stop between them and no comma anywhere, and the second \
-one mostly re-says or generalises the first, fuse them into ONE sentence with a real connector \
-(so / but / because / when / and / if), keeping every bit of the meaning: \
-  STACKED: "Longevity is becoming more visible in Dubai. Medical rigor and honest claims will earn lasting trust." \
-  FUSED:   "Longevity is becoming more visible in Dubai but medical rigor and honest claims are what will earn lasting trust." \
-  STACKED: "Time is the one luxury we cannot store. Investing in health and quality of life is a sensible definition of longevity." \
-  FUSED:   "Investing in health and quality of life is a good definition of longevity because time is a luxury we cannot store." \
-  STACKED: "A diagnosis can stop the investigation. I start with hormone testing." \
-  FUSED:   "Once a woman has a label everyone stops looking, so I test hormones before I accept it." \
-Note the second pair: the general claim leads and the concrete reason lands LAST. Never end a comment on the \
-abstraction — that dead generality at the end is what stops anyone replying. Vary the connector; do not reach \
-for "because" every time. LEAVE two sentences alone when each does genuinely different work and both already \
-read as speech, e.g. "After years of separate diagnoses, one explanation can feel compelling. Women deserve \
-clear evidence for every claim, Meghan." — that one is right as it stands. \
+sprinkling hedge words. Do not pad or trim a draft to a word count; the length was chosen for this post.
+
+SAID TWICE. This is the thing that most makes our comments read as machine-written. When a draft's second \
+sentence mostly re-says or generalises the first, DELETE it. When two short statements are really one thought, \
+say them as one sentence the way a person would; there is no required joining word. Leave two sentences alone \
+when each does different work and both already read as speech. \
+  REPEATS: "Once a woman has a label, everyone stops looking. A diagnosis can end the investigation." \
+  FIXED:   "Once a woman has a label, everyone stops looking." \
+  ONE THOUGHT: "Time is the one luxury we cannot store. Investing in health is a sensible definition of longevity." \
+  FIXED:       "Investing in health is a sensible definition of longevity when time is the one luxury we cannot store." \
 No emoji unless the voice explicitly uses them.
 
 Match this person's voice:
@@ -103,7 +96,7 @@ def humanize_comments(texts: list[str], voice_guide: str) -> list[str]:
         message = _client.with_options(max_retries=1, timeout=40.0).messages.create(
             model=settings.draft_model,
             max_tokens=700,
-            effort="low",  # fusing stacked statements is a judgement call, not a find-and-replace
+            effort="low",  # deciding whether a sentence repeats another is a judgement call
             messages=[{"role": "user", "content": content}],
         )
         data = extract_json(message)

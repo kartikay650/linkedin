@@ -1,3 +1,5 @@
+import random
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
@@ -9,6 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft, strip_unverifiable
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
+from app.llm.style import check_violations
 from app.models import Client, ClientDocument, Draft, Post
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
 from app.scraper.apify_client import account_usage
@@ -340,28 +343,77 @@ def apify_usage():
     return account_usage()
 
 
+# A comment that ends ", Name." is the sign-off reviewers keep deleting. 56 of Silvana's 161 posted
+# edits end that way, so without this filter the examples would teach it straight back.
+_SIGNOFF_RE = re.compile(r",\s+(?:Dr\.?\s+)?[A-Z][\w'\u2019-]+\.?\s*$")
+_MAX_EXAMPLES = 5
+_MIN_EXAMPLES = 3
+
+
+def _approved_examples(db: Session, post: Post) -> list[str]:
+    """Comments for this client that a HUMAN edited before approving or posting them.
+
+    The examples used to be the client's last 8 approved comments, edited or not. For Dr. Joe
+    Raffaele all 8 were the tool's own unedited output, so the drafter was learning from itself and
+    every pattern it had compounded. Now a comment qualifies only when:
+      - it was approved or posted, and someone changed its text first (edited_text differs from
+        what the tool last wrote);
+      - it is not paste-marked. Generated text never ends in whitespace, and about half of the
+        posted edits do, which looks like a rewrite pasted in from elsewhere (ChatGPT is the open
+        question in BACKLOG.md). Those are left out until that is answered;
+      - it passes the hard house-style bans (stacked statements excepted: that gate also fires on
+        the owner's own GOOD examples) and has no ", Name." sign-off.
+    At most five, rotated by post so no single example is shown on every draft, and none at all
+    when fewer than three qualify: two examples are copied rather than learned from."""
+    rows = (
+        db.query(Draft.text, Draft.edited_text)
+        .join(Post, Post.id == Draft.post_id)
+        .filter(Post.client_id == post.client_id, Draft.post_id != post.id,
+                Draft.status.in_(["approved", "posted"]), Draft.edited_text.isnot(None))
+        .order_by(Draft.created_at.desc()).limit(60).all()
+    )
+    norm = lambda t: " ".join((t or "").split()).lower()
+    picked: list[str] = []
+    for text, edited in rows:
+        if not edited or edited != edited.rstrip():  # empty, or paste-marked
+            continue
+        e = edited.strip()
+        if norm(e) == norm(text) or e in picked:  # unedited tool output, or a duplicate
+            continue
+        if _SIGNOFF_RE.search(e):
+            continue
+        if any(not v.startswith("stacked statements") for v in check_violations(e)):
+            continue
+        picked.append(e)
+    if len(picked) < _MIN_EXAMPLES:
+        return []
+    return random.Random(post.id).sample(picked, min(_MAX_EXAMPLES, len(picked)))
+
+
 def _draft_context(db: Session, post: Post):
     """Shared anti-repetition context for BOTH drafting and refining, so a Tweak gets the same
     guardrail inputs as a fresh Draft: (recent) this client's recent drafts to avoid; (global) a
-    cross-client sample for the self-aware profile; (approved) the client's approved comments
-    (voice/learning); (siblings) comments OTHER profiles already made on this SAME post."""
+    cross-client sample for the self-aware profile; (approved) comments a human edited for this
+    client (voice only, see _approved_examples); (siblings) comments OTHER profiles already made on
+    this SAME post.
+
+    recent and global are read from original_text, what the tool actually wrote. `text` is
+    overwritten by every Tweak, so a question that the reviewer removed with "No question" vanished
+    from the pattern stats the drafter uses to stop repeating itself, and the tool never learned it
+    was over-asking. Rows from before original_text existed fall back to text."""
+    wrote = func.coalesce(Draft.original_text, Draft.text)
     recent = [
-        r[0] for r in db.query(Draft.text)
+        r[0] for r in db.query(wrote)
         .join(Post, Post.id == Draft.post_id)
         .filter(Post.client_id == post.client_id, Draft.post_id != post.id)
         .order_by(Draft.created_at.desc()).limit(20).all()
     ]
     global_recent = [
-        r[0] for r in db.query(Draft.text)
+        r[0] for r in db.query(wrote)
         .filter(Draft.post_id != post.id)
         .order_by(Draft.created_at.desc()).limit(40).all()
     ]
-    approved = [
-        (d.edited_text or d.text) for d in db.query(Draft)
-        .join(Post, Post.id == Draft.post_id)
-        .filter(Post.client_id == post.client_id, Draft.status.in_(["approved", "posted"]))
-        .order_by(Draft.created_at.desc()).limit(8).all()
-    ]
+    approved = _approved_examples(db, post)
     siblings: list[str] = []
     if post.post_url:
         seen = set()

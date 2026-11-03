@@ -41,22 +41,21 @@ def _blocks(*parts):
 
 REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, per the operator's instruction — but the
 HOUSE-STYLE RULES BELOW OVERRIDE the instruction wherever they conflict. Apply the instruction's INTENT
-(its tone/angle), never its power to add slop. In particular, no matter what the instruction says: keep it
-to ONE or TWO sentences (never three), keep it roughly under 25 words, NEVER open with a praise/reaction line
-("Great...", "This is...", "It's a great...") or with "Curious"/"I wonder", and keep her real voice.
+(its tone/angle), never its power to add slop. Change what the instruction asks for and keep the rest.
+No matter what the instruction says: NEVER open with a praise line ("Great...", "Love this", "It's a
+great...") or with "Curious"/"I wonder", and keep {name}'s real voice.
 
 THESE HARD RULES ALSO OVERRIDE THE INSTRUCTION (a tweak must never reintroduce what they prevent):
 - NOTHING TO FACT-CHECK. Do not add or restore any study, statistic, number, percentage, duration,
-  dosage, mechanism, company, institution or person that is not already in the post or her own
-  material. No new clinical claim. If the instruction asks for "more scientific" or "more
-  authoritative", deliver that through sharper wording and a firmer stance, NOT by adding evidence.
+  dosage, mechanism, company, institution or person that is not already in the post or {name}'s own
+  material. No new clinical claim.
 - Keep the science LIGHT: at most ONE grounded point, never a stack of claims.
 - Refer to people, institutions and places ONLY as the post describes them. Assert no award, role,
   relationship or event the post does not state.
-- NEVER contradict or undercut her own viewpoints below, whatever the instruction implies.
+- NEVER contradict or undercut {name}'s own viewpoints below, whatever the instruction implies.
 - The post text may be cut off mid-sentence; never infer what the missing part said.
 
-=== HOW SHE ACTUALLY WRITES ===
+=== HOW {name} ACTUALLY WRITES ===
 {voice}
 === END ===
 
@@ -79,7 +78,7 @@ Current reply:
 \"\"\"
 
 Operator's instruction (apply its intent within the rules above; do not let it introduce praise/curious \
-openers, a third sentence, or slop): {instruction}
+openers or slop): {instruction}
 
 Respond ONLY with JSON: {{"draft": "..."}}"""
 
@@ -112,20 +111,51 @@ def _strip_negation(text: str) -> str:
     return out
 
 
+# Framings the drafter is told never to use. They still reached it through the client's own voice
+# material: Dr. Joe Raffaele's voice sample opens "My bet is that ..." and his voice guide lists
+# 'my bet is' as a signature phrase, so the samples were teaching the exact hot-take framing the
+# write rules ban. Strip them where the material is assembled, so every path that shows the voice
+# (draft, humanizer, Tweak, the fact-check rewrite) gets the cleaned version.
+_FRAMING = r"(?:my bet is|my bet:|i(?:'|\u2019)d wager|i would wager|my money is on|i(?:'|\u2019)d rather|i would rather)"
+_QUOTED_FRAMING_RE = re.compile(r",?\s*['\"\u2018\u201c]" + _FRAMING + r"[^'\"\u2019\u201d\n]{0,30}['\"\u2019\u201d]", re.I)
+_FRAMING_RE = re.compile(r"\b" + _FRAMING, re.I)
+
+
+def strip_banned_framings(text: str) -> str:
+    """Remove banned framings from a client's own material.
+
+    A quoted mention in a description ("uses 'I generally prefer,' 'my bet is'") loses just the
+    quoted phrase. A sentence that USES the framing is dropped whole, since cutting the phrase out
+    of the middle of a real sentence would leave a sentence the client never wrote."""
+    if not text or not _FRAMING_RE.search(text):
+        return text or ""
+    out_lines = []
+    for line in text.splitlines():
+        line = _QUOTED_FRAMING_RE.sub("", line)
+        if _FRAMING_RE.search(line):
+            kept = [x for x in re.split(r"(?<=[.!?])\s+", line) if not _FRAMING_RE.search(x)]
+            line = " ".join(kept)
+            if not line.strip():
+                continue
+        out_lines.append(line)
+    return "\n".join(out_lines).strip()
+
+
 def _voice_block(client: Client) -> str:
     """The person's real voice: verbatim samples first (strongest signal), then the
     written description. Falls back to the legacy tone_profile."""
     parts = []
-    if (client.voice_samples or "").strip():
+    samples = strip_banned_framings((client.voice_samples or "").strip())
+    if samples:
         # If any sample is transcribed speech (podcast/interview/video), it is the best register
         # anchor we have — it is literally how this person talks, which is the target.
-        raw = client.voice_samples.strip()
+        raw = samples
         spoken = any(k in raw.lower() for k in ("podcast", "interview", "spoken", "video"))
         head = ("Verbatim examples of their own words. Some of these are transcribed SPEECH — those "
                 "are the truest guide to how they actually talk, so match that rhythm above all:\n"
                 if spoken else "Verbatim examples of their own words:\n")
         parts.append(head + raw)
-    guide = (client.voice_guide or client.tone_profile or "").strip()
+    guide = strip_banned_framings((client.voice_guide or client.tone_profile or "").strip())
     if guide:
         # This text was extracted by brand onboarding from the client's OWN POSTS, and it was
         # being handed to the comment drafter as if it described comments. For Dr. Joe Raffaele it
@@ -144,12 +174,19 @@ def _voice_block(client: Client) -> str:
 
 
 def _benchmark_block(client: Client) -> str:
-    """Operator-curated ideal / non-ideal examples for THIS client (few-shot anchor)."""
+    """Operator-curated ideal / non-ideal examples for THIS client (few-shot anchor).
+
+    These had stopped reaching first drafts entirely (dropped in Aug 2026), so Lara Hemeryck's
+    hand-picked GOOD/AVOID lines only shaped a Tweak. They are the one source of examples a human
+    chose on purpose, so they go back into the per-client block. "Match this tone exactly" is gone:
+    told to match ten short lines exactly, the model copies their shape onto every post."""
     ex = (getattr(client, "benchmark_examples", "") or "").strip()
     if not ex:
         return ""
     return (
-        "=== APPROVED EXAMPLES FOR THIS CLIENT (match this tone exactly — hand-picked as ideal/non-ideal) ===\n"
+        "=== EXAMPLES THE AGENCY PICKED FOR THIS CLIENT (GOOD = how they sound, AVOID = what not to write) ===\n"
+        "Take the voice and register from the GOOD lines. Do not copy their wording or their shape; "
+        "each post sets its own.\n"
         + ex
         + "\n=== END ==="
     )
@@ -195,17 +232,17 @@ def _feedback_block(client: Client) -> str:
 
 
 def _voice_examples_block(texts: list[str] | None) -> str:
-    """Comments the team actually approved/posted for THIS client — the learning loop's
-    gold standard. Grows as the team works, so voice fidelity improves over time without
-    manual seeding. Match their voice; don't copy their structure (stay varied)."""
-    ex = [t.strip() for t in (texts or []) if t and t.strip()][:8]
+    """Comments a human on the team edited and then approved/posted for THIS client. The route
+    picks them (see _approved_examples in routers/posts.py) so that the tool never learns from its
+    own unedited output. Voice only: no structure, length or phrasing is to be copied."""
+    ex = [t.strip() for t in (texts or []) if t and t.strip()][:5]
     if not ex:
         return ""
     lines = "\n".join(f"- {t}" for t in ex)
     return (
-        "=== COMMENTS THE TEAM APPROVED FOR THIS CLIENT — the gold standard for how she really sounds ===\n"
-        "Learn the voice from these: their tone, rhythm, sentence length, vocabulary, and bluntness. "
-        "Match that. But do NOT copy their structure or phrasings — stay varied.\n" + lines + "\n=== END ==="
+        "=== COMMENTS THE TEAM EDITED AND POSTED FOR THIS CLIENT ===\n"
+        "Learn the voice from these: tone, word choice, bluntness. Do NOT copy their structure, "
+        "their length or their phrasings; each post sets its own.\n" + lines + "\n=== END ==="
     )
 
 
@@ -224,17 +261,18 @@ def _avoid_block(avoid_texts: list[str] | None) -> str:
 
 
 def _siblings_block(texts: list[str] | None, name: str) -> str:
-    """Comments OTHER profiles already made on this SAME post. Shown so this client's reply takes a
-    genuinely different angle (grounded in her own expertise) instead of echoing another profile —
-    the fix for 'two profiles get near-identical comments on the same post'."""
+    """Comments OTHER profiles already made on this SAME post, so two profiles never post the same
+    comment. It used to demand "a genuinely different angle, grounded in HER own expertise", and
+    since it fires on most posts it was one of the main sources of forced expertise. A different
+    DETAIL of the post is enough to tell two comments apart."""
     ex = [t.strip() for t in (texts or []) if t and t.strip()][:8]
     if not ex:
         return ""
     lines = "\n".join(f"- {t}" for t in ex)
     return (
         "=== OTHER PROFILES ALREADY COMMENTED ON THIS EXACT POST ===\n"
-        f"These were written for OTHER people on this same post. {name}'s comment MUST take a genuinely "
-        "different angle, grounded in HER own expertise — not a reword or the same point as these:\n"
+        f"These were written for OTHER people on this same post. {name}'s comment must react to a "
+        "different detail of the post, in different words. Do not reword these or make their point:\n"
         + lines + "\n=== END ==="
     )
 
@@ -347,30 +385,33 @@ def _draft_problems(text: str, avoid_texts: list[str] | None, profile: dict | No
 # anti-repetition memory, humanizer, negation strip, and violation/length guardrails all still
 # run around it. See the "reasoning, not a flag" design (2026-08).
 
-_BRIEF_PROMPT = """Distill what {name} actually knows and believes into a tight brief a writer can use to add \
-substance to comments. Use ONLY the material below — NEVER invent facts, studies, numbers, or positions she has \
+_BRIEF_PROMPT = """Summarise what {name} believes and works on, as BACKGROUND for someone writing LinkedIn \
+comments in their name. Use ONLY the material below — NEVER invent facts, studies, numbers, or positions they have \
 not expressed. If it is not in the material, leave it out.
+This is background so the writer never contradicts them or claims a view they do not hold. It is NOT a list of \
+points to put into comments, so do not phrase anything as a line to use.
 {material}
-Return 6-10 short bullet lines: her core positions and the specific points she can credibly make. Plain language, no preamble."""
+Return 6-10 short bullet lines: their main positions and the subjects they work on. Plain language, no preamble."""
 
 
-def _expertise_brief(client: Client, voice_examples: list[str] | None) -> str:
-    """A grounded brief of what the client actually knows/believes, distilled ONLY from their own
-    material (viewpoints, key messages, audience, voice samples, guardrails, approved comments) so
-    the drafter can be substantive WITHOUT inventing. Generated on the fly on the fast model and
-    reused across this post's candidates (garbage-in guard: nothing here that isn't in her material,
-    and the provenance check still backstops the final draft)."""
+def _expertise_brief(client: Client) -> str:
+    """Background on what the client believes and works on, distilled ONLY from their own material
+    (viewpoints, key messages, audience, voice samples, guardrails), so the drafter never invents a
+    position or contradicts one. Generated on the fly on the fast model and reused across this
+    post's candidates.
+
+    It used to be "the specific points she can credibly make" and included approved comments, which
+    turned it into a list of lines to insert: the comment tool kept bringing the client's expertise
+    to posts that did not need it. Approved comments are left out now; the drafter already sees the
+    edited ones in their own block."""
     mats = []
     for label, val in (
         ("VIEWPOINTS", client.viewpoints), ("KEY MESSAGES", client.key_messages),
-        ("AUDIENCE", client.audience), ("HER OWN WORDS", client.voice_samples),
+        ("AUDIENCE", client.audience), ("THEIR OWN WORDS", strip_banned_framings(client.voice_samples or "")),
         ("GUARDRAILS", client.guardrails),
     ):
         if (val or "").strip():
             mats.append(f"{label}: {val.strip()[:2000]}")
-    appr = [t.strip() for t in (voice_examples or []) if t and t.strip()][:8]
-    if appr:
-        mats.append("APPROVED COMMENTS: " + "\n".join(appr)[:1200])
     if not mats:
         return ""
     try:
@@ -380,21 +421,24 @@ def _expertise_brief(client: Client, voice_examples: list[str] | None) -> str:
 
 
 def _plan(client: Client, post: Post, brief: str, siblings_block: str = "") -> dict:
-    """Tone directive for the drafter. We deliberately DON'T make a separate reasoning
-    LLM call here: on the current model that step produced cautious, process-y "approach/
-    avoid" scaffolding that flattened drafts toward generic language. Instead we hand the
-    generate step a fixed tone-aware directive and let it judge human-vs-substantive itself;
-    the anti-generic write rules keep it specific, and cross-profile differentiation is still
-    enforced through the memory block (siblings) + the reused-opener gate. Cheaper and faster too."""
+    """Tone directive for the drafter. No separate reasoning call: on this model it produced
+    cautious, process-y scaffolding that flattened drafts. The generate step judges the post itself.
+
+    The default is what the client would naturally say. It used to be "engage the single most
+    important point with ONE specific, grounded point in this person's own voice and expertise",
+    which made every post a prompt for expertise, and the reviewers' complaints about forced
+    insight, first-person self-insertion and comments that repeat the post all trace back to it.
+    The client's own view is still allowed, under three conditions that say when it is NOT."""
     approach = (
-        "First decide what this post is: a substantive/expert post, or a personal or human "
-        "moment (a milestone, something vulnerable, a photo, a non-medical or off-topic post). "
-        "If it is a human moment, reply warmly and briefly with NO science, data, or biomarkers. "
-        "If it is substantive, engage the single most important point with ONE specific, grounded "
-        "point in this person's own voice and expertise — and a genuinely different angle from any "
-        "other profiles shown in the memory below."
+        "First decide what this post is. If someone has died or is seriously ill, write a short "
+        "condolence and nothing else. If it is another personal or human moment (a milestone, "
+        "something vulnerable, a photo, an off-topic post), reply warmly and briefly, with no "
+        "science, data or biomarkers. Otherwise, say what you would naturally say to the post, the "
+        "way you would say it to the author in person. Bring in a view of your own only when your "
+        "material shows you hold it, you would volunteer it on this post, and it is not about your "
+        "own clinic, patients, routine or credentials (unless the post asks about them)."
     )
-    return {"read": "", "approach": approach, "core": "", "can_add": [], "avoid": []}
+    return {"approach": approach}
 
 
 def _rules_block(client: Client) -> str:
@@ -425,47 +469,47 @@ def _rules_block(client: Client) -> str:
 # block 2 = per-client-static (voice, approved examples, rules, feedback, brief); block 3 = the
 # per-draft variable part (plan, memory, the post). Only 1 and 2 are cached.
 _WRITE_RULES = """=== HOW TO WRITE THIS REPLY ===
-Follow the RESPONSE DIRECTIVE given below. If it says stay human: warm, specific to what they said, bring NO science/data/biomarkers. If it says engage the argument: add a grounded point in her voice.
+You are writing as the client named below: "you" and "your" in these rules mean them. Follow the
+RESPONSE DIRECTIVE given below. The default is what you would naturally say to this post.
 
 NOTHING TO FACT-CHECK (hard rule, overrides everything else). No one on the team is a scientist who
-can verify a factual claim, so a comment that needs checking is unusable. But her OPINION is not a
-factual claim: saying what she believes needs no verification, because it is attributed to her. Only
-three things may appear in the comment:
+can verify a factual claim, so a comment that needs checking is unusable. An opinion of yours is not
+a factual claim: it needs no verification, because it is attributed to you. Only three things may
+appear in the comment:
 1. What the post itself says.
-2. What THIS PERSON BELIEVES — her viewpoints and key messages, given below. This is the strongest
-   thing you can bring and it needs no evidence. State it as her position, in her words.
+2. What you believe: your viewpoints and key messages, given below. Use one only when the post is
+   about it and you would naturally say it; it never needs evidence.
 3. Nothing else.
 So:
 - NEVER introduce a study, statistic, number, percentage, duration, dosage, mechanism, company,
-  institution, product or person that is not already in the post or her material.
-- No new clinical or statistical claim of your own. If a POINT needs evidence to stand up, replace it
-  with what she believes about the subject — do not water it down into a plainer observation.
+  institution, product or person that is not already in the post or your material.
+- No new clinical or statistical claim of your own. If a point would need evidence to stand up,
+  drop it and say the plainer thing.
 - Keep the science LIGHT: at most ONE grounded point. Do not stack claims. Over-claiming and
   claim-density damage the client's credibility more than a simple comment ever would.
 
-ADD SOMETHING. DO NOT RESTATE THE POST. Repeating a fact the post already stated, then adding an
-abstract principle ("Prevention starts while people still feel healthy"), is the single thing that
-makes these comments worthless — the author already knows what they wrote, and no one replies to
-their own words handed back to them. Read the post, decide which of these it deserves, and commit:
-- Most posts squarely in her field: add something from HER EXPERIENCE that the post does not
-  contain — what she sees in practice, what she measures, what she has watched play out. Ground it
-  in her material below. This is experience, NOT a verdict: do not rate, rank, dismiss or predict.
-  Banned outright, because they read as a hot take rather than expertise:
+REACT, DO NOT REPEAT. The author already knows what they wrote. Handing one of their facts back,
+then adding a general principle ("Prevention starts while people still feel healthy"), is the reply
+nobody wants. Say what a colleague would naturally say to it in person. The comment is about their
+post, not about you: use "I" only where a person naturally would, and keep your own clinic,
+patients, routine and credentials out of it unless the post asks about them.
+- A personal story, a loss, a milestone, something vulnerable, or a light everyday post: bring no
+  position at all. React like a person. Warmth is the whole comment, and a stance here is intrusive.
+- A post in your field: a plain, specific reaction is still the default. Add a view of your own
+  only when your material below shows you hold it on this exact point and you would volunteer it
+  here.
+- A post outside your field: a plain observation about one thing in it is enough. Do not
+  manufacture a view you do not hold.
+Whatever you say is a colleague's reaction, never a verdict on their work. Banned outright, because
+they read as a hot take:
     "My bet is that ...", "I'd wager", "my money is on" — never frame a view as a prediction.
     "I cannot trust it", "I don't trust", "that tells us nothing", "that is useless" — never
     deliver a judgement on someone else's tool, study or method.
-    "I would measure ...", "I would add ...", "I would track ...", "I'd compare ..." — this is
-    the most common one and it reads as telling the author how to do their work. It is advice in
-    the conditional, which is still advice. If she genuinely does the thing, say so in the
-    PRESENT tense about her own practice ("I measure ...", "I start with ...", "I look for ...").
-    If she does not actually do it, do not say it at all.
-  She is commenting under a colleague's post, not reviewing their work. A firm stance belongs only
-  where the post explicitly asks for one.
-- A personal story, a loss, a milestone, something vulnerable, or a light everyday post: bring no
-  position at all. React like a person. Warmth is the whole comment, and a stance here is intrusive.
-- A post genuinely outside her expertise: a specific, plain observation about one thing in it is
-  enough. Do not manufacture a view she does not hold.
-Decide from the post which of the three this is. Never assert a position she has not stated below.
+    "I would measure ...", "I would add ...", "I would track ...", "I'd compare ..." — advice in
+    the conditional is still advice, and it reads as telling the author how to do their work.
+    Leave it out.
+A firm stance belongs only where the post explicitly asks for one. Never assert a position you
+have not stated below.
 
 GET THE POST RIGHT.
 - Read what the post actually says before writing. React to its real subject, not the hook.
@@ -475,23 +519,27 @@ GET THE POST RIGHT.
   describes them. Do not assert any award, role, relationship, affiliation or event that the post
   does not state. If you are not certain who or what something is, do not name it.
 
-NEVER CONTRADICT THIS PERSON'S OWN VIEWPOINTS (given below). Do not argue the opposite of their
-stated philosophy, and do not undercut a position they hold. If the post's topic sits outside their
-stated views, stay warm and reactive instead of taking a stance.
+NEVER CONTRADICT YOUR OWN VIEWPOINTS (given below). Do not argue the opposite of your stated
+philosophy, and do not undercut a position you hold. If the post's topic sits outside your stated
+views, stay warm and reactive instead of taking a stance.
 
-BE SPECIFIC TO THIS POST: pick ONE concrete thing the post actually says and respond to that, so the
-comment could not sit under any other post. BANNED generic filler: "track it over time", "serial
-measurements", "careful patient selection", "the confidence it warrants", "broader clinical/health
-context", "clinical interpretation", "longitudinal follow-up". Never use "curious" or "makes me curious".
+BE SPECIFIC TO THIS POST: react to ONE thing the post actually says, so the comment could not sit
+under any other post, without repeating it back. BANNED generic filler: "track it over time",
+"serial measurements", "careful patient selection", "the confidence it warrants", "broader
+clinical/health context", "clinical interpretation", "longitudinal follow-up". Never use "curious"
+or "makes me curious".
 
-Let the post set the length, usually short and longer when it earns it. Structurally different from her recent comments, and
-never the words "tends to" / "seems to". Respond ONLY with JSON: {"drafts": ["your one reply"]}"""
+Let the post set the length, usually short and longer when it earns it. Structurally different from
+your recent comments, and never the words "tends to" / "seems to". Respond ONLY with JSON:
+{"drafts": ["your one reply"]}"""
 
-_DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something she typed.
+_DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must be indistinguishable from something {name} typed.
 
-=== HOW SHE ACTUALLY WRITES (match exactly) ===
+=== HOW {name} ACTUALLY WRITES ===
 {voice}
 === END ===
+
+{benchmark}
 
 {voice_examples}
 
@@ -501,7 +549,9 @@ _DRAFT_CLIENT = """You are writing ONE LinkedIn comment reply AS {name}. It must
 
 {feedback}
 
-=== WHAT SHE ACTUALLY KNOWS (ground any substance ONLY in this — never invent) ===
+=== BACKGROUND: WHAT {name} BELIEVES AND WORKS ON ===
+So you never contradict {name} or invent a view. These are not points to work into the comment; use
+one only when the post is about it.
 {brief}
 === END ==="""
 
@@ -514,20 +564,18 @@ def _viewpoints_block(client: Client) -> str:
     if not v:
         return ""
     return (
-        "=== HER OWN VIEWPOINTS / PHILOSOPHY (never contradict or undercut these) ===\n"
+        f"=== {client.name}'S OWN VIEWPOINTS (never contradict or undercut these; use one only when "
+        "the post is about it) ===\n"
         + v[:2000]
         + "\n=== END ==="
     )
 
 _DRAFT_VARIABLE = """=== HOW TO RESPOND HERE (follow this exactly) ===
 {approach}
-Core point of the post: {core}
-What she could add (only if the approach calls for substance): {can_add}
-Do NOT center on / do NOT do: {avoid}
 
 {memory}
 
-The post she is replying to:
+The post {name} is replying to:
 Author: {author}
 \"\"\"
 {content}
@@ -535,17 +583,15 @@ Author: {author}
 {shape}
 
 === TWO CHECKS BEFORE YOU RETURN (the last things you read, and the two we get wrong most) ===
-1. NOTHING STACKED. If your comment is two short statements with a full stop between them and no
-   comma anywhere, it is wrong. Either they are one thought, in which case write ONE sentence and
-   join the clauses (so / but / because / when / if), or the second genuinely adds something, in
-   which case it needs to read as speech and not as a summary of the first. Never end on an
-   abstraction or a principle — put the concrete part LAST. Vary how you connect; reaching for
-   "because" every time is its own tell.
-2. ARE YOU JUST HANDING BACK THEIR OWN POINT? The author already knows what they wrote, so a
-   comment that repeats it adds nothing. Bring something of hers that was not in the post.
-   This is NOT an instruction to ask a question. A question is an occasional shape, not the way to
-   sound engaged, and most comments should be a statement. If the draft ends in a question mark,
-   check that a question is genuinely the best reply to THIS post rather than the easy way out."""
+1. SAID TWICE? If a second sentence repeats the first in other words, or turns it into a general
+   principle, delete it. If the two are really one thought, say it as one sentence the way you would
+   out loud. Two sentences are fine when the second says something new.
+2. WOULD {name} TYPE THIS, under a colleague's post? Cut any sentence that hands the post's own
+   point back, exists to show expertise, or brings in your own clinic or routine when the post did
+   not ask. This is NOT an instruction to ask a question. A question is an occasional shape, not
+   the way to sound engaged, and most comments should be a statement. If the draft ends in a
+   question mark, check that a question is genuinely the best reply to THIS post rather than the
+   easy way out."""
 
 
 def _participant_note(client: Client, post: Post) -> str:
@@ -577,14 +623,13 @@ def _reason_generate_once(client: Client, post: Post, brief: str, plan: dict,
                           voice_ex_block: str, memory_block: str, shape: str) -> str:
     g_static = HOUSE_STYLE + "\n\n" + _WRITE_RULES
     c_static = _DRAFT_CLIENT.format(
-        name=client.name, voice=_voice_block(client), voice_examples=voice_ex_block,
-        viewpoints=_viewpoints_block(client),
+        name=client.name, voice=_voice_block(client), benchmark=_benchmark_block(client),
+        voice_examples=voice_ex_block, viewpoints=_viewpoints_block(client),
         rules=_rules_block(client), feedback=_feedback_block(client), brief=(brief or "(none)"),
     )
     part = _participant_note(client, post)
     variable = _DRAFT_VARIABLE.format(
-        approach=plan.get("approach", ""), core=plan.get("core", ""),
-        can_add="; ".join(plan.get("can_add") or []), avoid="; ".join(plan.get("avoid") or []),
+        approach=plan.get("approach", ""), name=client.name,
         memory=memory_block, author=post.author_name, content=post.content_snippet,
         shape=("\n" + shape if shape else "") + (("\n\n" + part) if part else ""),
     )
@@ -622,52 +667,72 @@ def _prediagnosis(post: Post) -> bool:
 
 def _hard_problems(text: str, avoid: list[str], allow_formula: bool) -> list[str]:
     """House-style/length/repetition violations worth a regenerate. Drops the 'before symptoms'
-    formula flag when the post itself is about pre-diagnosis action (then it's on-topic)."""
-    probs = _draft_problems(text, avoid, None)
+    formula flag when the post itself is about pre-diagnosis action (then it's on-topic).
+
+    Stacked statements are left out on purpose. A whole regenerate told "fuse them into one
+    sentence with a connector" is what produced the over-polished compound sentences; the caller
+    sends a stacked comment to _fuse instead, which deletes a repeated sentence before it joins
+    anything. Detection itself is unchanged (check_violations still reports it)."""
+    probs = [p for p in _draft_problems(text, avoid, None) if not p.startswith("stacked statements")]
     if allow_formula:
         probs = [p for p in probs if "shows up" not in p]
     return probs
 
 
-_FUSE_PROMPT = """This LinkedIn comment reads as separate statements bolted together rather than one
-person talking. Rewrite it so it flows.
+_FUSE_PROMPT = """This LinkedIn comment reads as separate statements placed side by side rather than one
+person talking. Fix it with the smallest change that works.
 
 Comment: "{text}"
 
-Rules:
-- Keep every idea and every specific detail. Do not shorten it to fix it, and do not add anything new.
-- If two thoughts are really one, JOIN them into a single sentence with a real connector
-  (so / but / because / when / if / and). Vary the connector; do not reach for "because" every time.
-- If there are three ideas and the transitions feel abrupt, drop the weakest one and join the rest.
-  A comment carrying one idea well beats three stacked up.
-- Put the concrete part LAST. Never end on an abstraction or a general principle: that dead
-  generality at the end is what stops anyone replying.
-- Do not turn it into a question, and do not add an opinion, a prediction or a verdict.
-- Keep her voice and her wording wherever you can. This is a rhythm fix, not a rewrite.
+In this order of preference:
+1. If one sentence mostly repeats another, or turns it into a general principle, DELETE that
+   sentence and return the rest word for word.
+2. If two sentences are really one thought, say it as one sentence the way a person would out
+   loud. There is no required joining word; connect it however that person would.
+3. If it already reads like someone talking, return it completely unchanged.
+Add nothing: no new idea, opinion, prediction, verdict or question. Keep every word you keep.
 
-Examples of the fix:
-  BEFORE: "Longevity is becoming more visible in Dubai. Medical rigor and honest claims will earn lasting trust."
-  AFTER:  "Longevity is becoming more visible in Dubai but medical rigor and honest claims are what will earn lasting trust."
-  BEFORE: "Time is the one luxury we cannot store. Investing in health and quality of life is a sensible definition of longevity."
-  AFTER:  "Investing in health and quality of life is a good definition of longevity because time is a luxury we cannot store."
-
-If the comment ALREADY reads naturally as someone talking, return it completely unchanged — some
-short two-sentence replies are perfectly human ("Quite a pairing for 2027. I'm looking forward to
-seeing the New York programme you and David put together.").
+Examples:
+  BEFORE: "Once a woman has a label, everyone stops looking. A diagnosis can end the investigation."
+  AFTER:  "Once a woman has a label, everyone stops looking."
+  BEFORE: "Time is the one luxury we cannot store. Investing in health is a sensible definition of longevity."
+  AFTER:  "Investing in health is a sensible definition of longevity when time is the one luxury we cannot store."
 
 Respond ONLY with JSON: {{"text": "..."}}"""
 
 
+def _sentences(text: str) -> list[str]:
+    return [x.strip() for x in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if x.strip()]
+
+
+def _norm_words(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9']+", (text or "").lower()))
+
+
+def _is_deletion(original: str, out: str) -> bool:
+    """True when `out` is the original with whole sentences removed and nothing else changed."""
+    orig = [_norm_words(x) for x in _sentences(original)]
+    kept = [_norm_words(x) for x in _sentences(out)]
+    if not kept or len(kept) >= len(orig):
+        return False
+    it = iter(orig)
+    return all(any(k == o for o in it) for k in kept)  # kept is an in-order subsequence of orig
+
+
+def _violation_kinds(text: str) -> set[str]:
+    # "rambling (63 words) — ..." and "rambling (61 words) — ..." are the same violation.
+    return {re.split(r" \(| —", v, maxsplit=1)[0] for v in check_violations(text)}
+
+
 def _fuse(client: Client, text: str) -> str:
-    """Repair a comment that still reads as bolted-together statements.
+    """Repair a comment that still reads as stacked statements.
 
-    This replaces a warning label on the draft card. The tool had been detecting the problem,
-    failing to fix it, and passing it to the reviewer with "AI could not get this one right" —
-    which spent the tokens, produced the comment, and then made its failure her job. It also
-    mislabelled genuinely good short replies, so she stopped trusting the ones that were fine.
+    Deletion first. The owner's diagnosis was that the first sentence is usually fine and the
+    second re-says it, so the cheapest correct repair is usually to drop the second. This used to
+    tell the model to keep every idea and join them with a connector, which produced the
+    over-polished compound sentences reviewers then rejected.
 
-    One small focused call succeeds far more often than asking the full drafter to start again:
-    it sees only the sentence and has only this job, against ~4,700 words of competing rules.
+    One small focused call succeeds far more often than asking the full drafter to start again.
     Returns the original on any failure, so this can only help."""
     if not text or not text.strip():
         return text
@@ -679,8 +744,13 @@ def _fuse(client: Client, text: str) -> str:
         return text
     if not out:
         return text
-    # Never accept a repair that loses half the comment or trips the house style.
-    if len(out.split()) < 0.6 * len(text.split()) or check_violations(out):
+    # A pure deletion may be much shorter than the original, and that is the point of it. Anything
+    # else is a rewrite and must not lose half the comment.
+    if not _is_deletion(text, out) and len(out.split()) < 0.6 * len(text.split()):
+        return text
+    # Reject a repair that adds a violation the original did not have. Comparing kinds rather than
+    # requiring a clean result: a comment with an unrelated tic would otherwise never be repaired.
+    if _violation_kinds(out) - _violation_kinds(text):
         return text
     return out
 
@@ -699,7 +769,7 @@ def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid:
         return ""
     probs = _hard_problems(text, avoid, allow)
     if probs:
-        fix = "Also fix: " + "; ".join(probs) + ". Keep it specific and in her voice."
+        fix = "Also fix: " + "; ".join(probs) + f". Keep it specific and in {client.name}'s voice."
         retry = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block,
                                       (shape + " " + fix).strip())
         # Only take the retry if it actually fixed something. This used to accept it blind, so a
@@ -707,8 +777,8 @@ def _reason_candidate(client: Client, post: Post, brief: str, plan: dict, avoid:
         # comment shipped that way in the benchmark. refine_draft already compared; this didn't.
         if retry and len(_hard_problems(retry, avoid, allow)) < len(probs):
             text = retry
-    # Last resort for the one problem a regenerate keeps failing to fix. Cheap, and only fires on
-    # the ~10% of drafts that still read as bolted-together statements.
+    # The one repair for stacked statements (see _hard_problems). Cheap, and only fires on the
+    # drafts that still read as statements placed side by side.
     if has_stacked_statements(text):
         text = _fuse(client, text)
     return text
@@ -769,17 +839,16 @@ def _unquestion(client: Client, text: str) -> str:
 def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,
                     voice_examples: list[str] | None = None, global_texts: list[str] | None = None,
                     sibling_texts: list[str] | None = None) -> list[str]:
-    """Generate `count` DIVERSE candidates via the reasoning drafter: distil a grounded brief of what
-    the client actually knows, REASON about how this specific post should be answered (engage a real
-    argument — even under a personal/novelty hook — vs honour a human moment), draft to that plan
-    grounded in her material, and self-critique against it. The self-aware anti-repetition memory
-    (from `avoid_texts` + `global_texts`), humanizer, negation strip, and violation/length guardrails
-    all still run. `voice_examples` = comments the team approved (learning-loop voice anchor + part of
-    the grounding brief). `sibling_texts` = comments OTHER profiles already made on THIS SAME post, so
-    this client takes a genuinely different, self-tailored angle instead of echoing them. Candidates
-    run in parallel to stay well under the serverless time budget."""
+    """Generate `count` candidates for a post. Each one reads the post, decides whether it is a
+    human moment or not, and says what the client would naturally say, with the client's own view
+    only where their material shows they hold it. Option 1 takes the post's main point, option 2 a
+    different detail. The anti-repetition memory (`avoid_texts` + `global_texts`), the humanizer,
+    the negation strip and the violation gate all run on each. `voice_examples` = comments a human
+    edited and then approved (voice only). `sibling_texts` = comments OTHER profiles already made on
+    THIS SAME post, so this client reacts to a different detail. Candidates run in parallel to stay
+    well under the serverless time budget."""
     base_avoid = list(avoid_texts or [])
-    brief = _expertise_brief(client, voice_examples)
+    brief = _expertise_brief(client)
     siblings_block = _siblings_block(sibling_texts, client.name)
     plan = _plan(client, post, brief, siblings_block)
     voice_ex_block = _voice_examples_block(voice_examples)
@@ -788,9 +857,15 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
     # Reused-opener gate also considers other profiles' comments on this post, so a second profile
     # can't open the same way as the first.
     gate_avoid = base_avoid + [t.strip() for t in (sibling_texts or []) if t and t.strip()]
-    # Option 1 is free; option 2+ must take a clearly different opening/angle (still on the approach).
+    # Option 1 answers the post's main point as plainly as you would in person; option 2 picks up a
+    # different detail. They run in parallel and cannot see each other, so each is told its job
+    # rather than "be different from the other one", which it could not check. A death or serious
+    # illness overrides both: every option is a short condolence.
     n = max(1, count)
-    shapes = [""] + ["Take a clearly different opening and angle from the other option(s), still following the approach above."] * (n - 1)
+    _cond = " If the post is about a death or serious illness, ignore this and write a short condolence."
+    shapes = ["This option replies to the post's main point, as plainly as you would say it in person." + _cond] + [
+        "This option replies to one other specific detail in the post, a different one from its main "
+        "point, with a different opening." + _cond] * (n - 1)
 
     # Resolve lazy relationships HERE, on the calling thread, before the pool starts. The workers
     # build _feedback_block(client), which reads client.feedback — a lazy relationship — and a
@@ -830,10 +905,10 @@ Comment: "{text}"
 
 The unverifiable part(s): {flagged}
 
-Rewrite it so it makes a plainer, safe observation instead — keep her voice and keep it about the same
-post, but remove the claim entirely rather than softening it. Do not introduce any new fact, number,
-study, mechanism, company, institution or person. Prefer her perspective or a simple human reaction
-over anything that asserts evidence. Keep it as short as the point needs.
+Rewrite it so it makes a plainer, safe observation instead — keep {name}'s voice and keep it about the
+same post, but remove the claim entirely rather than softening it. Do not introduce any new fact,
+number, study, mechanism, company, institution or person. Prefer a simple human reaction over anything
+that asserts evidence. Keep it as short as the point needs.
 
 The post being replied to:
 \"\"\"{content}\"\"\"
@@ -863,7 +938,9 @@ def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]
     if not out:
         return text
     out = humanize_comments([out], _voice_block(client))[0]
-    return _strip_negation(out) or text
+    out = _strip_negation(out) or text
+    # This rewrite runs after the drafter's own repair, so it needs the same one.
+    return _fuse(client, out) if has_stacked_statements(out) else out
 
 
 def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
@@ -881,7 +958,10 @@ def _refine_once(client: Client, post: Post, current_text: str, instruction: str
     except (ValueError, KeyError):
         return ""
     out = humanize_comments([revised], _voice_block(client))
-    return _strip_negation(out[0] if out else revised)
+    out = _strip_negation(out[0] if out else revised)
+    # _hard_problems no longer sends stacked statements to a regenerate, so a Tweak repairs them the
+    # same way a first draft does. Without this the Tweak path would have no repair at all.
+    return _fuse(client, out) if has_stacked_statements(out) else out
 
 
 # Matches the "No question" chip's own wording AND the ways an operator phrases it free-hand.

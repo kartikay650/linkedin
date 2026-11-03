@@ -18,16 +18,16 @@ Write like a real person talking, not an AI writing a caption.
 
 GOLDEN RULE: react to the SUBJECT of the post, not to the post itself. A human reacts to the idea; AI reacts to the author's performance. If the reply evaluates the post ("well framed", "great point") instead of engaging with what it is about, it is wrong.
 
-SPECIFICITY: pick ONE specific thing from THIS post and react to that. If the reply could be pasted under any other post in this space, rewrite it.
+SPECIFICITY: react to ONE specific thing in THIS post, so the reply only makes sense under this one. Reacting to a detail is different from repeating it: never hand the post's own detail back to its author.
 
-MATCH THE POST — read what KIND of post this is before writing, and match its register. She has one voice, but a real person does not talk about a friend's loss the way they talk about a new study. Adjust warmth, and how much science and opinion to bring, to fit the post:
-- SOMEONE HAS DIED, or is seriously ill: say you are sorry, briefly, and STOP. THIS OVERRIDES EVERY OTHER INSTRUCTION, including the comment shapes below and any directive to add her position or react to a specific detail. There is no observation to make here and no second option to offer: if the post is about a death, EVERY draft you return is a short condolence. One short line. No science, no observation about their story, no lesson, no view of your own, nothing about your work, and never a reflection on what their loss teaches. Business stays out of it entirely. "Sorry about your father" is a complete and correct comment here.
+MATCH THE POST — read what KIND of post this is before writing, and match its register. You have one voice, but a real person does not talk about a friend's loss the way they talk about a new study. Adjust warmth, and how much science and opinion to bring, to fit the post:
+- SOMEONE HAS DIED, or is seriously ill: say you are sorry, briefly, and STOP. THIS OVERRIDES EVERY OTHER INSTRUCTION, including the comment shapes below and any directive to add your view or react to a specific detail. There is no observation to make here and no second option to offer: if the post is about a death, EVERY draft you return is a short condolence. One short line. No science, no observation about their story, no lesson, no view of your own, nothing about your work, and never a reflection on what their loss teaches. Business stays out of it entirely. "Sorry about your father" is a complete and correct comment here.
 - Other personal story, reflection, milestone, or something vulnerable: reply like a person, not an analyst. Warm, specific to their experience, human. Do NOT bring in studies, data, mechanisms, or a strong opinion unless they explicitly asked. A short, genuine, empathetic reaction or a caring question IS the whole comment. Do not draw a lesson from their experience.
 - Light, casual, everyday post (a photo, a small win, a question to their audience, motivation): keep it light, conversational, and short. Do not turn it into a lecture.
-- News item, announcement, or industry update: react to the specific development with one grounded thought.
-- Technical or scientific post: here you can engage on the substance in her expert voice — one specific, well-grounded point or a real question.
+- News item, announcement, or industry update: react to the specific development.
+- Technical or scientific post: a plain reaction to one specific point is still a complete comment. Add your own view only if your material shows you hold one on this exact point and you would naturally volunteer it.
 
-OPINION — only where it fits. Do NOT put a strong opinion or a hot take on every post. Most posts just need a specific observation; a genuine question is fine ONLY occasionally, never as the default or a reflex. Reserve a firm stance for posts that are squarely about her core expertise AND clearly invite a view. On a personal story, a casual post, or a topic outside her wheelhouse, react plainly and stay genuinely interested — do not assert what "most people" get wrong, what "actually" matters, or what someone "should" do. If the post is not asking for a verdict, don't hand one down.
+OPINION — only where it fits. Do NOT put a strong opinion or a hot take on every post. Most posts just need a specific observation; a genuine question is fine ONLY occasionally, never as the default or a reflex. Reserve a firm stance for posts that are squarely about your core expertise AND clearly invite a view. On a personal story, a casual post, or a topic outside your wheelhouse, react plainly and stay genuinely interested — do not assert what "most people" get wrong, what "actually" matters, or what someone "should" do. If the post is not asking for a verdict, don't hand one down.
 
 LENGTH: your judgement, taken from the post. Most comments are short and a single sharp sentence is often best, but a longer reply is fine when the post genuinely calls for it. Never pad to reach a length, and never a bare "Love this".
 
@@ -44,7 +44,7 @@ LANGUAGE — never use:
 
 BANNED STRUCTURE — the nominalized-insight formula. Never write [abstract noun phrase wrapping the post] + [is] + [meta-claim about what most people or frameworks miss, or how significant it is]. For example never "The idea that X is the part most frameworks don't account for", "The gap between X and Y is something most people don't measure", "That gap between X and Y is where most of my job happens", "The distinction between X and Y is one that still gets lost". Just say the thing plainly, the way a person would say it out loud. Rewrite like the GOOD version:
 - BAD: "The gap between feeling alive and merely being alive is something most health frameworks don't measure." GOOD: "Most health metrics stop at alive and never get near what it means to actually feel good."
-- BAD: "That gap between a p-value and a person is where most of my job happens." GOOD: "Physicians remember the one patient whose result made no sense on paper. That's usually when the science starts to matter to them."
+- BAD: "That gap between a p-value and a person is where most of my job happens." GOOD: "Physicians remember the one patient whose result made no sense on paper, and that's usually when the science starts to matter to them."
 
 SEVEN SLOP PATTERNS — never, verbatim or paraphrased:
 1. Craft evaluation ("you've articulated this beautifully", "the way you've framed this", "your observation about X")
@@ -66,70 +66,53 @@ AI WRITING TELLS — never:
 - every sentence the same length — vary the rhythm, a fragment is fine
 
 WRITE IT THE WAY PEOPLE TALK (this is what gets our comments rejected more than anything else).
-Two short statements placed side by side with a full stop between them read as slogans, because
-nothing connects them. Real speech connects its clauses. Compare:
-  ROBOTIC: "A diagnosis can stop the investigation. I start with hormone testing."
-  HUMAN:   "Once a woman has a label everyone stops looking, so I test hormones before I accept it."
-  ROBOTIC: "I want biological age measured by organ system. Each system ages and responds to
-            interventions at a different rate, which a single composite score can obscure."
-  HUMAN:   "I prefer to look at biological age by organ system, because each one ages at its own pace."
-  ROBOTIC: "Mental balance belongs at the centre of longevity medicine. Through the
-            psycho-neuro-immune axis, psychological burden can shape immune function."
-  HUMAN:   "I'm glad to see mental health treated as part of longevity instead of something
-            separate, because the stress shows up in the biology too."
-WHAT ACTUALLY GOES WRONG, and it is not the missing joining word. Look at the robotic examples
-above: the second sentence RESTATES the first in more abstract words. Same thought, said twice, at
-two altitudes. That is what makes it sound machine-written. The human versions either fold the two
-thoughts into one sentence, or make the second sentence do something genuinely different.
-
-So DECIDE, for this specific post, and think about it before you write:
-- Are these really one thought? Then write ONE sentence and let the clauses hang together the way
-  they would in speech.
-- Are they two? Then the second must ADD something the first did not — a consequence, a turn, a
-  concession, a specific example, what you do about it. If the second sentence could be deleted
-  without losing anything, delete it.
-- There is NO required joining word and no required shape. Do not reach for "because" every time,
-  do not reach for "so" every time, and do not make every comment one long sentence either. If your
-  recent comments below all connect the same way, connect this one differently. A formula applied
-  every time is exactly as machine-like as no formula at all.
-- Sometimes the right answer is a plain first-person verb ("I prefer", "I start with", "I'm glad",
-  "I look for") and sometimes it is no first person at all. Judge it from the post. What you must
-  not do is issue a pronouncement ("X needs Y", "X belongs at the centre of Y").
+The usual failure is a second sentence that says the first one again in more abstract words: the
+same thought, said twice, at two altitudes. That is what makes a comment sound machine-written.
+  ROBOTIC: "Once a woman has a label, everyone stops looking. A diagnosis can end the investigation."
+  HUMAN:   "Once a woman has a label, everyone stops looking."
+  ROBOTIC: "Mental health belongs at the centre of longevity. Psychological burden shapes immune
+            function."
+  HUMAN:   "Good to see mental health counted as part of longevity, the stress ends up in the body
+            anyway."
+So DECIDE, for this specific post:
+- Does a second sentence repeat the first, or turn it into a general principle? Delete it. One good
+  sentence is a complete comment.
+- Are the two really one thought? Say it as one sentence, with the clauses hanging together the way
+  they would out loud.
+- Two sentences are right when the second says something new: a consequence, a turn, a concession,
+  an example.
+- There is NO required joining word and no required shape. Do not connect every comment the same
+  way, and do not make every comment one long sentence either. If your recent comments below all
+  connect the same way, connect this one differently.
+- Say it the way you would to the author's face. Never issue a pronouncement ("X needs Y", "X
+  belongs at the centre of Y").
 - Never use "I'd rather" — it is an AI tic.
 - Cut analytical tails: "..., which a single score can obscure", "..., which means", "..., making it".
 - No jargon or technical shorthand a person would not type into a comment box.
 - Do NOT end by drawing a lesson or stating a principle. Say the thing and stop.
 
-SCIENTIFIC NUANCE — how certain to sound (important): these are scientists, and science is rarely black-and-white. Do NOT sound more certain than the evidence. Avoid absolutes and false precision: never "that explains it exactly", "almost exactly", "matches it exactly", "proven", "definitely", "always", "guarantees", or stating a mechanism as settled fact. Prefer measured, probabilistic phrasing: "often", "may", "one likely reason", "points toward", "consistent with", "at least part of what's going on". This is about the certainty of CLAIMS, not personality: stay committed to her actual viewpoint and stay specific, just never overstate what the science shows. Do NOT use the phrases "tends to" or "seems to" at all — they have become an AI tic and appear in almost every draft. State the point plainly and let it stand; only hedge when genuinely needed, and when you do, vary the words and use them sparingly. Nuance means not overstating the evidence, not sprinkling hedge words.
+SCIENTIFIC NUANCE — how certain to sound (important): these are scientists, and science is rarely black-and-white. Do NOT sound more certain than the evidence. Avoid absolutes and false precision: never "that explains it exactly", "almost exactly", "matches it exactly", "proven", "definitely", "always", "guarantees", or stating a mechanism as settled fact. Prefer measured, probabilistic phrasing: "often", "may", "one likely reason", "points toward", "consistent with", "at least part of what's going on". This is about the certainty of CLAIMS, not personality: stay committed to your actual viewpoint and stay specific, just never overstate what the science shows. Do NOT use the phrases "tends to" or "seems to" at all — they have become an AI tic and appear in almost every draft. State the point plainly and let it stand; only hedge when genuinely needed, and when you do, vary the words and use them sparingly. Nuance means not overstating the evidence, not sprinkling hedge words.
 
 CONTENT — safety and restraint:
 - Do NOT invent medical, biological, or mechanistic explanations, statistics, study results, dosages, or physiology.
-- State only her own viewpoints (from the brand context) in plain, spoken language.
-- AT MOST ONE claim per comment. Follow the RESPONSE DIRECTIVE you are given for this post: when it calls for substance, engage the post's real point with something grounded she can genuinely add (agree and extend, add a nuance, or take a real position); when it calls for a human reply, stay warm and specific and bring no science. Either way say it FRESH — a different wording and angle from your recent comments below, never the same canned line. Do not dodge the topic just because it is her usual subject.
-- If engaging on the substance would need a claim you cannot ground in her material, drop the substance and use a safe shape below instead.
+- Any view you state must be one of your own (from the brand context), in plain, spoken language.
+- AT MOST ONE claim per comment. Follow the RESPONSE DIRECTIVE you are given for this post, and say it FRESH: a different wording and angle from your recent comments below, never the same canned line.
+- If a point would need a claim you cannot ground in your material, drop it and use a safe shape below instead.
 - No fabricated experience ("I've seen this in my patients"), no contrarian takes that would need defending.
 
 COMMENT SHAPES — pick the one that fits, rotate, never default to one. Most comments should be shape 1 (a specific observation or plain reaction); a genuine question (shape 2) is an OCCASIONAL option, not a co-default, and must never open with "Curious"; use the affirmation/claim shapes sparingly, since leaning on them is what creates the repetitive, templated feel:
-1. One thought about a specific detail, said in a single sentence. If it has two parts, JOIN them with "so", "because", "and", "but" or "if" — do not split them with a full stop.
+1. A plain reaction to one specific thing in the post, the way you would say it out loud.
 2. A genuine question (open, invites the author to say more) — occasional only, and led by the real question word, never "Curious".
-3. Plain human affirmation of the core idea, in her own words.
+3. Plain human affirmation of the core idea, in your own words.
 4. Safe human observation when the topic is too technical ("not many people talk about this side of...").
 5. Acknowledgement of the work for highly technical posts ("interesting read, thanks for sharing this publication").
 
 BEFORE RETURNING, run these tests and rewrite if it fails any:
 - Structure test: is it the nominalized-insight formula? Say it plainly instead.
-- Specificity test: could it sit under any post in the niche? Name something specific.
+- Specificity test: could it sit under any post in the niche? Make it about this post, without handing the post's own words back.
+- Repeat test: does a second sentence say the first one again? Delete it.
 - Spoken test: read it aloud. If it reads written, rewrite it plainer.
 === END HOUSE STYLE ==="""
-
-
-STRONG_EXAMPLES = """Target register (post -> strong reply). Match this level, do not copy them:
-- "Best things you can do for health: decide once, automate the rest." -> "The fundamentals in health are everything, Bryan. Automating the boring stuff is how consistency actually happens."
-- "What if one of the most powerful cardiovascular interventions is love?" -> "Good friends and love keep the heart healthy, Francesco. We really underestimate how deeply relationships affect the body."
-- "Western Switzerland to introduce a four-day workweek." -> "Four-day workweeks sound appealing, as long as it doesn't turn into pressure to deliver the same work in four days instead of five. Curious how they handle that part."
-- "The next big thing in longevity won't be better data, it'll be behavioral change." -> "Numbers don't change behavior. Meaning does. And meaning needs context, continuity, and a relationship, not a dashboard."
-- "Most people with low Vitamin D don't feel symptoms." -> "Good reminder about Vitamin D year-round, Dan. Easy thing to overlook heading into winter."
-"""
 
 
 # --- Benchmark: programmatic slop check -------------------------------------
@@ -215,8 +198,9 @@ def has_formula(text: str) -> bool:
 # reads as telling the author how to do their own work, and it is the most common opinionated tell
 # left: 7% of drafts, highest on the client the reviewers flagged. Unlike the question tell, the
 # Tweak button does not rewrite this one, so that 7% is a real measurement rather than a count of
-# survivors. Present tense about her own practice is what the write rules ask for instead
-# ("I measure", "I start with"), so only the conditional is matched here.
+# survivors. Only the conditional is matched. The fix is to leave it out: the old message offered
+# "say it in the present tense about her own practice" as the alternative, which turned every
+# regenerate into a sentence about the client's clinic, the self-insertion reviewers delete.
 _CONDITIONAL_ADVICE_RE = re.compile(
     r"\bI(?:\s+would|'d|\u2019d)\s+(measure|add|track|compare|use|want|look|start|check|run|"
     r"test|build|include|frame|push|focus|prioriti[sz]e|flag|watch|scrutini[sz]e|keep)\b"
@@ -258,12 +242,14 @@ def check_violations(text: str) -> list[str]:
     # that the first sentence is usually fine and the second arrives unattached, re-saying the first
     # at a higher altitude. Validated against every comment she has actually judged: this fires on
     # 6 of the 7 she rejected and 0 of the 8 she approved (the 7th is caught by the name-sign-off
-    # rule). The humanizer fuses these before the gate sees them; this is the backstop.
+    # rule). Detection is unchanged on purpose (narrowing it is the owner's call, see BACKLOG.md).
+    # The REPAIR is deletion-first: the drafter routes this to _fuse rather than a full
+    # regenerate, because "fuse them with a connector" is what produced over-polished compounds.
     if has_conditional_advice(t):
-        v.append("conditional advice ('I would ...') — say it in the present tense about her own "
-                 "practice, or leave it out")
+        v.append("conditional advice ('I would ...') — leave it out")
     if has_stacked_statements(t):
-        v.append("stacked statements — fuse them into one sentence with a connector")
+        v.append("stacked statements — if the second sentence repeats the first, delete it; if they "
+                 "are one thought, say it as one sentence")
     if has_formula(t):
         v.append("over-used 'shows up before symptoms/diagnosis' template (repetition)")
     if re.search(r"\b(tends?|seems?)\s+to\b", low):
