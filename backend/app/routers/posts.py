@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session, aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
-from app.llm.draft import generate_drafts, refine_draft, strip_unverifiable
+from app.llm.draft import (TWEAK_CHIPS, angle_draft, generate_drafts, refine_draft, shorten_draft,
+                           strip_unverifiable)
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
 from app.llm.style import check_violations
-from app.models import Client, ClientDocument, Draft, Post
+from app.models import Client, ClientDocument, Draft, Post, TweakEvent
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
 from app.scraper.apify_client import account_usage
 from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
@@ -430,6 +431,26 @@ def _draft_context(db: Session, post: Post):
     return recent, global_recent, approved, siblings
 
 
+def _safety_pass(client: Client, post: Post, text: str, docs_text: str):
+    """Provenance + the 'nothing to fact-check' enforcement for one piece of tool-written text.
+    Every path that puts new tool text on a card (draft, Tweak, Different angle) runs this, so no
+    path can skip it. No DB access, so it is safe in a worker thread."""
+    provenance = annotate_provenance(client, post, text, docs_text)
+    flagged = _flagged_claims(provenance)
+    if flagged:
+        safer = strip_unverifiable(client, post, text, flagged)
+        if safer and safer != text:
+            text = safer
+            provenance = annotate_provenance(client, post, text, docs_text)
+    return text, provenance
+
+
+def _log_tweak(db: Session, draft: Draft, post: Post, chip: str | None, instruction: str,
+               before: str) -> None:
+    db.add(TweakEvent(client_id=post.client_id, post_id=post.id, draft_id=draft.id, chip=chip,
+                      instruction=None if chip else (instruction or "")[:500], before_text=before))
+
+
 @router.post("/posts/{post_id}/draft", response_model=list[DraftOut])
 def draft_reply(post_id: int, db: Session = Depends(get_db)):
     """Generate reply drafts for a post — only ever called explicitly by a human
@@ -483,15 +504,7 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
          client.guardrails, post.content_snippet)
 
     def _safe(text: str):
-        """Provenance + the 'nothing to fact-check' enforcement for ONE candidate. No DB access."""
-        provenance = annotate_provenance(client, post, text, docs_text)
-        flagged = _flagged_claims(provenance)
-        if flagged:
-            safer = strip_unverifiable(client, post, text, flagged)
-            if safer and safer != text:
-                text = safer
-                provenance = annotate_provenance(client, post, text, docs_text)
-        return text, provenance
+        return _safety_pass(client, post, text, docs_text)
 
     # Run the candidates' safety passes CONCURRENTLY: serially they made a two-candidate draft
     # ~60s (the serverless ceiling); in parallel the cost is the slowest one, not the sum.
@@ -519,33 +532,73 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
 
 @router.post("/drafts/{draft_id}/refine", response_model=DraftOut)
 def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session = Depends(get_db)):
-    """Rewrite a draft per an operator instruction (e.g. 'make it shorter', 'more
-    personal', 'add a question'), keeping it in the client's voice."""
+    """Rewrite a draft per a Tweak chip (sent by id) or a free-text instruction, keeping it in the
+    client's voice and through the same gates and safety pass as a first draft."""
     draft = db.get(Draft, draft_id)
     if not draft:
         raise HTTPException(404, "draft not found")
+    chip = (payload.chip or "").strip() or None
+    if chip is not None and chip not in TWEAK_CHIPS:
+        raise HTTPException(422, f"unknown tweak '{chip}'")
+    if chip == "angle":
+        raise HTTPException(422, "use POST /drafts/{id}/angle for a different angle")
+    instruction = TWEAK_CHIPS[chip] if chip else (payload.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(422, "say how to change it, or pick a tweak")
+    if draft.status == "posted":
+        raise HTTPException(409, "this comment is already posted on LinkedIn")
     post = db.get(Post, draft.post_id)
     current = draft.edited_text or draft.text
     # Same anti-repetition context as a fresh draft, so a Tweak is fully guarded too (no more
     # 'Curious'/praise-slop leaking back in through the refine path).
     recent, global_recent, approved, siblings = _draft_context(db, post)
-    revised = refine_draft(post.client, post, current, payload.instruction, avoid_texts=recent,
-                           voice_examples=approved, global_texts=global_recent, sibling_texts=siblings)
-    docs_text = _docs_text(db, post.client_id)
-    provenance = annotate_provenance(post.client, post, revised, docs_text)
-    # Enforce "nothing to fact-check" on the TWEAK path too. A tweak (especially "more scientific"
-    # / "more authoritative") is a prime way for an unverifiable claim to come back, and previously
-    # this route only re-labelled it and handed it to the reviewer.
-    flagged = _flagged_claims(provenance)
-    if flagged:
-        safer = strip_unverifiable(post.client, post, revised, flagged)
-        if safer and safer != revised:
-            revised = safer
-            provenance = annotate_provenance(post.client, post, revised, docs_text)
+    context = dict(avoid_texts=recent, voice_examples=approved, global_texts=global_recent,
+                   sibling_texts=siblings)
+    if chip == "shorter":
+        revised = shorten_draft(post.client, post, current, **context)
+    else:
+        revised = refine_draft(post.client, post, current, instruction, **context)
+    # Enforce "nothing to fact-check" on the TWEAK path too. A tweak is a prime way for an
+    # unverifiable claim to come back, and previously this route only re-labelled it.
+    revised, provenance = _safety_pass(post.client, post, revised, _docs_text(db, post.client_id))
+    _log_tweak(db, draft, post, chip, instruction, current)
     draft.text = revised
     # original_text is deliberately NOT touched here. It is the only record of what the tool
     # actually produced, and this line is what used to destroy it.
     draft.edited_text = None  # revised text supersedes prior manual edits
+    draft.provenance = provenance
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+@router.post("/drafts/{draft_id}/angle", response_model=DraftOut)
+def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
+    """Replace one option with a comment on a different angle from everything already shown for
+    this post: this option as it stands, what the tool first wrote for it, and the other options.
+    A new first draft for this option, so original_text is reset to it."""
+    draft = db.get(Draft, draft_id)
+    if not draft:
+        raise HTTPException(404, "draft not found")
+    if draft.status == "posted":
+        raise HTTPException(409, "this comment is already posted on LinkedIn")
+    post = db.get(Post, draft.post_id)
+    current = draft.edited_text or draft.text
+    taken = [current, draft.text, draft.original_text] + [
+        d.edited_text or d.text for d in post.drafts
+        if d.id != draft.id and d.status in ("pending", "drafted", "approved")
+    ]
+    taken = list(dict.fromkeys(t.strip() for t in taken if t and t.strip()))
+    recent, global_recent, approved, siblings = _draft_context(db, post)
+    text = angle_draft(post.client, post, taken, avoid_texts=recent, voice_examples=approved,
+                       global_texts=global_recent, sibling_texts=siblings)
+    if not text:
+        raise HTTPException(502, "couldn't write a different angle — try again")
+    text, provenance = _safety_pass(post.client, post, text, _docs_text(db, post.client_id))
+    _log_tweak(db, draft, post, "angle", "", current)
+    draft.text = text
+    draft.original_text = text
+    draft.edited_text = None
     draft.provenance = provenance
     db.commit()
     db.refresh(draft)

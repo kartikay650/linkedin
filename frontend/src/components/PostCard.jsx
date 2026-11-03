@@ -40,27 +40,30 @@ export default function PostCard({ post, onActioned }) {
   const postedDraft = post.drafts.find((d) => d.status === "posted");
   const stage = postStage(post); // active | draft | approved | posted
 
+  // Chip ids only: the wording lives on the server (TWEAK_CHIPS in backend/app/llm/draft.py), so
+  // a chip can't drift from the checks that enforce it, and chip use is logged by id. Removed:
+  // More scientific / More authoritative (they pushed a firmer stance), More personal (it asked
+  // for first person, which reviewers delete) and Simpler (overlapped with More conversational).
   const TWEAKS = [
-    ["Shorter", "make it shorter, one or two sentences at most"],
-    ["Warmer", "make it warmer and more empathetic and human, without any praise opener or clinical jargon"],
-    ["Simpler", "say it in plain, simple language a non-expert would understand, no jargon; keep it natural, not a summary"],
-    ["More personal", "make it more personal and human, in her own first-person voice"],
-    // Replaces "More neutral", which overlapped almost entirely with "Remove opinion" below
-    // (that one is strictly stronger: it drops unverified claims too). Questions were the most
-    // common complaint from the reviewer, so the row is better spent on this.
-    ["No question", "rewrite it as a plain statement rather than a question: keep the same point and the same specific detail, say it as an observation from her own experience or practice, and do not end with a question mark"],
-    ["More scientific", "make it more scientific and clinical in tone: precise, evidence-minded, measured"],
-    ["More authoritative", "make it more authoritative, peer-to-peer between experts; never congratulatory, never 'well done' or 'great post'"],
-    ["Remove opinion", "remove personal opinion and any unverified claim; keep only what reflects the post itself and facts grounded in her own material"],
+    ["Different angle", "angle"],
+    ["Shorter", "shorter"],
+    ["More conversational", "conversational"],
+    ["More personality", "personality"],
+    ["Warmer", "warmer"],
+    ["No question", "no_question"],
+    ["Remove opinion", "remove_opinion"],
   ];
 
-  const handleRefine = async (draft, instruction) => {
-    if (!instruction || !instruction.trim()) return;
+  // `how` is { chip } for a chip or { instruction } for free text.
+  const handleRefine = async (draft, how) => {
+    if (!how.chip && !(how.instruction || "").trim()) return;
     setRefining(draft.id);
     try {
-      const updated = await api.refineDraft(draft.id, instruction.trim());
+      const updated = how.chip === "angle"
+        ? await api.angleDraft(draft.id)
+        : await api.refineDraft(draft.id, how.chip ? { chip: how.chip } : { instruction: how.instruction.trim() });
       setEditedText((prev) => ({ ...prev, [draft.id]: updated.text }));
-      setTweak((prev) => ({ ...prev, [draft.id]: "" }));
+      if (!how.chip) setTweak((prev) => ({ ...prev, [draft.id]: "" }));
       // Refresh the citation for the rewritten text. Web-checking is manual now
       // (the "Check sources" button) so drafting/tweaking never fires a paid search.
       setProvByDraft((prev) => ({ ...prev, [draft.id]: updated.provenance || [] }));
@@ -360,11 +363,11 @@ export default function PostCard({ post, onActioned }) {
 
             {/* Tweak row: quick chips + free-text instruction */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-              {TWEAKS.map(([label, instruction]) => (
+              {TWEAKS.map(([label, chip]) => (
                 <button
-                  key={label}
+                  key={chip}
                   disabled={refining === draft.id}
-                  onClick={() => handleRefine(draft, instruction)}
+                  onClick={() => handleRefine(draft, { chip })}
                   style={{
                     padding: "4px 10px", borderRadius: 999, border: "1px solid var(--border)",
                     background: "var(--surface)", fontSize: 12, color: "var(--text-muted)",
@@ -378,11 +381,11 @@ export default function PostCard({ post, onActioned }) {
                 value={tweak[draft.id] || ""}
                 disabled={refining === draft.id}
                 onChange={(e) => setTweak((p) => ({ ...p, [draft.id]: e.target.value }))}
-                onKeyDown={(e) => { if (e.key === "Enter") handleRefine(draft, tweak[draft.id]); }}
+                onKeyDown={(e) => { if (e.key === "Enter") handleRefine(draft, { instruction: tweak[draft.id] || "" }); }}
                 style={{ flex: 1, minWidth: 140, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, fontFamily: "inherit" }}
               />
               <button
-                onClick={() => handleRefine(draft, tweak[draft.id])}
+                onClick={() => handleRefine(draft, { instruction: tweak[draft.id] || "" })}
                 disabled={refining === draft.id || !(tweak[draft.id] || "").trim()}
                 style={{
                   padding: "6px 12px", borderRadius: 8, border: "none",

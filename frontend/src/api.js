@@ -61,8 +61,12 @@ export const api = {
     request(`/drafts/${draftId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteDraft: (draftId) => request(`/drafts/${draftId}`, { method: "DELETE" }),
   draftReply: (postId) => request(`/posts/${postId}/draft`, { method: "POST" }),
-  refineDraft: (draftId, instruction) =>
-    request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify({ instruction }) }),
+  // A chip sends its id ({ chip: "warmer" }); free text sends { instruction }. The server owns
+  // the chip wording.
+  refineDraft: (draftId, body) =>
+    request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify(body) }),
+  angleDraft: (draftId) =>
+    request(`/drafts/${draftId}/angle`, { method: "POST" }),
   verifyClaims: (draftId) => request(`/drafts/${draftId}/verify-claims`, { method: "POST" }),
   syncClient: (clientId) => request(`/clients/${clientId}/sync`, { method: "POST" }),
   syncPlan: (clientId, force = false) =>

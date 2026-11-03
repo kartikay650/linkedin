@@ -131,6 +131,8 @@ _BANNED_SUBSTRINGS = [
     "worth sitting with", "worth watching", "the heart of this",
     "it's worth noting", "in today's world", "delve", "tapestry", "testament",
     "i'd rather",  # AI tic — "I prefer" is what a person says
+    # hot-take framings the write rules ban; they also reached the drafter via a voice sample
+    "my bet is", "i'd wager", "my money is on",
 ]
 
 _PRAISE_OPENERS = [
@@ -226,7 +228,9 @@ def has_stacked_statements(text: str) -> bool:
 def check_violations(text: str) -> list[str]:
     """Return a list of house-style violations in a draft. Empty list = clean."""
     t = (text or "").strip()
-    low = t.lower()
+    # Curly apostrophes come in from pasted text and from the model; without this "I’d rather"
+    # slipped past a ban written as "i'd rather".
+    low = t.lower().replace("\u2019", "'")
     v = []
     if "—" in t or "–" in t:
         v.append("em dash")

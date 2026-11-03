@@ -63,6 +63,8 @@ THESE HARD RULES ALSO OVERRIDE THE INSTRUCTION (a tweak must never reintroduce w
 
 {benchmark}
 
+{voice_examples}
+
 {feedback}
 
 {memory}
@@ -701,8 +703,19 @@ Examples:
 Respond ONLY with JSON: {{"text": "..."}}"""
 
 
+_ABBREV_RE = re.compile(r"(?:\b(?:Dr|Mr|Mrs|Ms|Prof|St|vs|etc|approx|e\.g|i\.e)|\b[A-Z])\.$")
+
+
 def _sentences(text: str) -> list[str]:
-    return [x.strip() for x in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if x.strip()]
+    """Split a comment into sentences without breaking "Dr. Smith" or "e.g. this" in two."""
+    parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if x.strip()]
+    out: list[str] = []
+    for x in parts:
+        if out and _ABBREV_RE.search(out[-1]):
+            out[-1] = out[-1] + " " + x
+        else:
+            out.append(x)
+    return out
 
 
 def _norm_words(text: str) -> str:
@@ -836,6 +849,30 @@ def _unquestion(client: Client, text: str) -> str:
     return out
 
 
+_CONDOLENCE = " If the post is about a death or serious illness, ignore this and write a short condolence."
+
+
+def _draft_setup(client: Client, post: Post, avoid_texts, voice_examples, global_texts, sibling_texts):
+    """Everything a first draft is built from, shared by generate_drafts and angle_draft so the two
+    can never drift apart."""
+    # Resolve lazy relationships HERE, on the calling thread, before any pool starts. The workers
+    # build _feedback_block(client), which reads client.feedback — a lazy relationship — and a
+    # SQLAlchemy session is not thread-safe, so two workers could both trigger that load on the
+    # same session at once.
+    _ = list(getattr(client, "feedback", None) or [])
+    base_avoid = list(avoid_texts or [])
+    brief = _expertise_brief(client)
+    siblings_block = _siblings_block(sibling_texts, client.name)
+    plan = _plan(client, post, brief, siblings_block)
+    voice_ex_block = _voice_examples_block(voice_examples)
+    profile = output_profile(base_avoid + list(global_texts or []))
+    memory_block = "\n\n".join(b for b in (_self_awareness_block(profile), siblings_block, _avoid_block(base_avoid)) if b)
+    # Reused-opener gate also considers other profiles' comments on this post, so a second profile
+    # can't open the same way as the first.
+    gate_avoid = base_avoid + [t.strip() for t in (sibling_texts or []) if t and t.strip()]
+    return brief, plan, voice_ex_block, memory_block, gate_avoid
+
+
 def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: list[str] | None = None,
                     voice_examples: list[str] | None = None, global_texts: list[str] | None = None,
                     sibling_texts: list[str] | None = None) -> list[str]:
@@ -847,32 +884,16 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
     edited and then approved (voice only). `sibling_texts` = comments OTHER profiles already made on
     THIS SAME post, so this client reacts to a different detail. Candidates run in parallel to stay
     well under the serverless time budget."""
-    base_avoid = list(avoid_texts or [])
-    brief = _expertise_brief(client)
-    siblings_block = _siblings_block(sibling_texts, client.name)
-    plan = _plan(client, post, brief, siblings_block)
-    voice_ex_block = _voice_examples_block(voice_examples)
-    profile = output_profile(base_avoid + list(global_texts or []))
-    memory_block = "\n\n".join(b for b in (_self_awareness_block(profile), siblings_block, _avoid_block(base_avoid)) if b)
-    # Reused-opener gate also considers other profiles' comments on this post, so a second profile
-    # can't open the same way as the first.
-    gate_avoid = base_avoid + [t.strip() for t in (sibling_texts or []) if t and t.strip()]
+    brief, plan, voice_ex_block, memory_block, gate_avoid = _draft_setup(
+        client, post, avoid_texts, voice_examples, global_texts, sibling_texts)
     # Option 1 answers the post's main point as plainly as you would in person; option 2 picks up a
     # different detail. They run in parallel and cannot see each other, so each is told its job
     # rather than "be different from the other one", which it could not check. A death or serious
     # illness overrides both: every option is a short condolence.
     n = max(1, count)
-    _cond = " If the post is about a death or serious illness, ignore this and write a short condolence."
-    shapes = ["This option replies to the post's main point, as plainly as you would say it in person." + _cond] + [
+    shapes = ["This option replies to the post's main point, as plainly as you would say it in person." + _CONDOLENCE] + [
         "This option replies to one other specific detail in the post, a different one from its main "
-        "point, with a different opening." + _cond] * (n - 1)
-
-    # Resolve lazy relationships HERE, on the calling thread, before the pool starts. The workers
-    # build _feedback_block(client), which reads client.feedback — a lazy relationship — and a
-    # SQLAlchemy session is not thread-safe, so two workers could both trigger that load on the
-    # same session at once. Done inside generate_drafts so every caller is covered, not just the
-    # draft route (which only force-loads what its own safety pass reads).
-    _ = list(getattr(client, "feedback", None) or [])
+        "point, with a different opening." + _CONDOLENCE] * (n - 1)
 
     def one(sh: str) -> str:
         return _reason_candidate(client, post, brief, plan, gate_avoid, voice_ex_block, memory_block, sh)
@@ -895,6 +916,64 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
         if fixed and not _is_question(fixed) and fixed not in out[:-1]:
             out[-1] = fixed
     return out
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z']+", (text or "").lower()) if len(w) > 3}
+
+
+def _overlap(a: str, b: str) -> float:
+    """Share of the shorter comment's content words that also appear in the other one."""
+    wa, wb = _content_words(a), _content_words(b)
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / min(len(wa), len(wb))
+
+
+# A new angle that shares more than half its content words with something the reviewer already
+# passed on is the same comment reworded, which is what "Regenerate" kept producing.
+_ANGLE_MAX_OVERLAP = 0.5
+
+
+def angle_draft(client: Client, post: Post, taken: list[str], avoid_texts: list[str] | None = None,
+                voice_examples: list[str] | None = None, global_texts: list[str] | None = None,
+                sibling_texts: list[str] | None = None) -> str:
+    """One new comment on a different angle from everything the reviewer has already seen.
+
+    "Regenerate" replaces both options with two fresh ones that cannot see what they replace, so
+    it often came back with the same point in new words. This goes through the full first-draft
+    path (same prompt, same gates) with one extra instruction: the comments already on the table,
+    and a request to react to something else in the post. At most one retry, which covers both a
+    house-style failure and a reworded repeat, so it never costs more than a first draft."""
+    taken = [t.strip() for t in taken if t and t.strip()]
+    brief, plan, voice_ex_block, memory_block, gate_avoid = _draft_setup(
+        client, post, avoid_texts, voice_examples, global_texts, sibling_texts)
+    listed = "\n".join(f"- {t}" for t in taken[:6])
+    shape = ("The reviewer has already seen these comments for this post and wants a different one:\n"
+             + listed + "\nReact to a different detail or a different part of the post from all of "
+             "them, in different words, with a different opening." + _CONDOLENCE)
+    allow = _prediagnosis(post)
+    gate = gate_avoid + taken
+
+    def score(t: str) -> int:
+        repeat = any(_overlap(t, x) > _ANGLE_MAX_OVERLAP for x in taken)
+        return len(_hard_problems(t, gate, allow)) + (1 if repeat else 0)
+
+    text = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block, shape)
+    if not text:
+        return ""
+    if score(text):
+        probs = _hard_problems(text, gate, allow)
+        if any(_overlap(text, x) > _ANGLE_MAX_OVERLAP for x in taken):
+            probs.append("it makes the same point as one of the comments above")
+        fix = "Also fix: " + "; ".join(probs) + f". Keep it specific and in {client.name}'s voice."
+        retry = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block,
+                                      shape + " " + fix)
+        if retry and score(retry) < score(text):
+            text = retry
+    if has_stacked_statements(text):
+        text = _fuse(client, text)
+    return text
 
 
 _DECLAIM_PROMPT = """This LinkedIn comment, written as {name}, contains a claim that would need
@@ -944,10 +1023,11 @@ def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]
 
 
 def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
-                 memory_block: str) -> str:
+                 memory_block: str, voice_ex_block: str = "") -> str:
     rest = REFINE_PROMPT.format(
         name=client.name, voice=_voice_block(client), viewpoints=_viewpoints_block(client),
-        benchmark=_benchmark_block(client), feedback=_feedback_block(client), memory=memory_block,
+        benchmark=_benchmark_block(client), voice_examples=voice_ex_block,
+        feedback=_feedback_block(client), memory=memory_block,
         content=post.content_snippet, current=current_text, instruction=instruction)
     content = _blocks((HOUSE_STYLE, True), (rest, False))  # cache HOUSE_STYLE across tweaks
     try:
@@ -972,6 +1052,70 @@ _NO_QUESTION_RE = re.compile(
     r"(rather than a question|instead of a question|not a question|no question|without a question"
     r"|as an? (plain |simple )?statement|make it a statement|don'?t ask|do not ask|stop asking"
     r"|not end with a question mark|no question mark)", re.I)
+
+
+# Tweak chips. The wording lives on the server, keyed by an id the dashboard sends, so a chip can
+# never drift from the checks below that enforce it, and so chip use can be logged by id. Every
+# chip is written to the same boundary as the drafter: none of them may add a claim, a credential,
+# or a story about the client's own work. ("No question" used to say "say it as an observation
+# from her own experience or practice", which turned every press into the self-insertion
+# reviewers delete.) "shorter" is handled by shorten_draft and "angle" by angle_draft; they are
+# listed so the route can validate an id in one place.
+TWEAK_CHIPS = {
+    "angle": "",
+    "shorter": "make it shorter: cut whatever is not doing work and keep its point",
+    "conversational": "make it sound more like something said out loud to the author: plainer "
+                      "words and a looser rhythm, the same point, and no longer than it is now",
+    "personality": "let more of this person's own personality come through, taken from how they "
+                   "write and the examples above: their word choice, their bluntness or humour. "
+                   "Do not add a claim, a credential, or anything about their own work",
+    "warmer": "make it warmer and more human, without any praise opener or clinical jargon",
+    "no_question": "rewrite it as a plain statement rather than a question: keep the same point and "
+                   "the same specific detail, and do not end with a question mark",
+    "remove_opinion": "remove personal opinion and any unverified claim; keep only a plain reaction "
+                      "to what the post itself says",
+}
+
+
+_PICK_PROMPT = """A reviewer wants this LinkedIn comment, written as {name}, made shorter. Here it is, one
+numbered sentence per line:
+{numbered}
+
+Pick the ONE sentence that works best as the whole comment on its own: it makes sense without the
+others, it responds to the post, and it is the one {name} would most naturally say. If none of
+them makes sense on its own, answer 0.
+
+The post:
+\"\"\"{content}\"\"\"
+
+Respond ONLY with JSON: {{"pick": <number>}}"""
+
+
+def shorten_draft(client: Client, post: Post, current_text: str, **context) -> str:
+    """The "Shorter" chip.
+
+    With two or more sentences, keep one of them word for word. The reviewer's complaint is almost
+    always that the comment says one thing and then says it again, so the shorter comment is
+    usually already sitting inside the long one; rewriting it from scratch lost the wording she
+    was happy with and often came back about as long. One small call picks the sentence, and it is
+    returned verbatim: no humanizer, no negation strip, nothing to re-introduce a tic. A comment
+    that is already one sentence, or whose sentences do not stand alone, gets a tight rewrite
+    through the normal Tweak path instead."""
+    sents = _sentences(current_text)
+    if len(sents) >= 2:
+        numbered = "\n".join(f"{i + 1}. {x}" for i, x in enumerate(sents))
+        try:
+            pick = int(extract_json(_call(
+                settings.relevance_model,
+                _PICK_PROMPT.format(name=client.name, numbered=numbered,
+                                    content=(post.content_snippet or "")[:1500]),
+                100, 20.0,
+            )).get("pick", 0))
+        except Exception:
+            pick = 0
+        if 1 <= pick <= len(sents):
+            return sents[pick - 1]
+    return refine_draft(client, post, current_text, TWEAK_CHIPS["shorter"], **context)
 
 
 def _wants_no_question(instruction: str) -> bool:
@@ -1000,8 +1144,12 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     )
     gate_avoid = base_avoid + [t.strip() for t in (sibling_texts or []) if t and t.strip()]
     allow = _prediagnosis(post)
+    # The edited examples reach a Tweak too. "More personality" has nothing to draw on without
+    # them, and every other chip is better anchored with them.
+    _ = list(getattr(client, "feedback", None) or [])
+    voice_ex_block = _voice_examples_block(voice_examples)
 
-    text = _refine_once(client, post, current_text, instruction, memory_block)
+    text = _refine_once(client, post, current_text, instruction, memory_block, voice_ex_block)
     if not text:
         return current_text
     probs = _hard_problems(text, gate_avoid, allow)
@@ -1017,7 +1165,8 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
         if unmet:
             fix += ("It must NOT be a question. Rewrite it as a plain statement that makes the same "
                     "point, and do not end with a question mark. ")
-        retry = _refine_once(client, post, current_text, (instruction + " " + fix).strip(), memory_block)
+        retry = _refine_once(client, post, current_text, (instruction + " " + fix).strip(), memory_block,
+                             voice_ex_block)
         if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
             # Never accept a retry that still asks when the operator asked it not to.
             if not (_wants_no_question(instruction) and _is_question(retry)):

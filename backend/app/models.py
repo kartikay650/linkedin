@@ -300,6 +300,25 @@ class Draft(Base):
     post = relationship("Post", back_populates="drafts")
 
 
+class TweakEvent(Base):
+    """One press of a Tweak chip, a free-text Tweak, or "Different angle".
+
+    Nothing recorded which chips reviewers use or on what, so there was no way to tell a chip that
+    fixes a real failure from one nobody presses. `before_text` keeps the text the reviewer moved
+    away from, which is the cleanest signal there is of what she did not want. No foreign keys:
+    Regenerate deletes drafts outright, and the log has to survive that."""
+    __tablename__ = "tweak_events"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, nullable=True, index=True)
+    post_id = Column(Integer, nullable=True)
+    draft_id = Column(Integer, nullable=True)
+    chip = Column(String(32), nullable=True)        # None for a free-text instruction
+    instruction = Column(Text, nullable=True)       # free text only, capped at 500 chars
+    before_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class BurnerEvent(Base):
     __tablename__ = "burner_events"
 

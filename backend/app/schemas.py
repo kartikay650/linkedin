@@ -198,7 +198,10 @@ class DraftUpdate(BaseModel):
 
 
 class RefineDraftRequest(BaseModel):
-    instruction: str
+    # A chip sends its id ("warmer", "shorter", ...) and the server holds the wording; free text
+    # sends `instruction`. One of the two is required.
+    instruction: str = ""
+    chip: str | None = None
 
 
 class PostWithDrafts(PostOut):
