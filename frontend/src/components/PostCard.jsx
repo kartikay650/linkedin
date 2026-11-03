@@ -41,6 +41,11 @@ export default function PostCard({ post, onActioned }) {
   // Whether the fact-check on a card still matches its text, after an edit saved here.
   const [staleByDraft, setStaleByDraft] = useState({});
   const [rechecking, setRechecking] = useState(null);
+  // Whether the last fact-check on a card failed to run, after a Tweak or Re-check here.
+  const [checkFailed, setCheckFailed] = useState({});
+  // What the server holds for each card after a Tweak, angle or Save edit made here. Without it a
+  // Tweak's result looked like an unsaved edit, because the draft prop is not refetched.
+  const [serverText, setServerText] = useState({});
 
   // Drafts still being worked: generated (pending), moved to draft, or approved — not posted/rejected.
   const workingDrafts = post.drafts.filter((d) => ["pending", "drafted", "approved"].includes(d.status));
@@ -70,10 +75,14 @@ export default function PostCard({ post, onActioned }) {
         ? await api.angleDraft(draft.id)
         : await api.refineDraft(draft.id, how.chip ? { chip: how.chip } : { instruction: how.instruction.trim() });
       setEditedText((prev) => ({ ...prev, [draft.id]: updated.text }));
+      setServerText((prev) => ({ ...prev, [draft.id]: updated.edited_text ?? updated.text }));
       if (!how.chip) setTweak((prev) => ({ ...prev, [draft.id]: "" }));
       // Refresh the citation for the rewritten text. Web-checking is manual now
       // (the "Check sources" button) so drafting/tweaking never fires a paid search.
       setProvByDraft((prev) => ({ ...prev, [draft.id]: updated.provenance || [] }));
+      // The server re-checked the new text, so whatever made the card stale no longer applies.
+      setStaleByDraft((prev) => ({ ...prev, [draft.id]: !!updated.provenance_stale }));
+      setCheckFailed((prev) => ({ ...prev, [draft.id]: !!updated.check_failed }));
     } catch (e) {
       toast(`Couldn't tweak that reply: ${e.message}. Try again.`);
     } finally {
@@ -113,6 +122,7 @@ export default function PostCard({ post, onActioned }) {
     const text = editedText[draft.id] ?? draft.edited_text ?? draft.text;
     try {
       const updated = await api.updateDraft(draft.id, { edited_text: text });
+      setServerText((prev) => ({ ...prev, [draft.id]: text }));
       // An edit can add a claim the fact-check never saw, so the card says when it is stale.
       setStaleByDraft((prev) => ({ ...prev, [draft.id]: !!updated?.provenance_stale }));
       setSavedId(draft.id);
@@ -186,6 +196,7 @@ export default function PostCard({ post, onActioned }) {
       const updated = await api.recheckDraft(draftId);
       setProvByDraft((prev) => ({ ...prev, [draftId]: updated.provenance || [] }));
       setStaleByDraft((prev) => ({ ...prev, [draftId]: !!updated.provenance_stale }));
+      setCheckFailed((prev) => ({ ...prev, [draftId]: !!updated.check_failed }));
     } catch (e) {
       toast(`Couldn't re-check that comment: ${e.message}. Try again.`);
     } finally {
@@ -259,6 +270,14 @@ export default function PostCard({ post, onActioned }) {
   };
 
   const handleDraftReply = async () => {
+    // Regenerate replaces every generated option that is not posted. A hand-written comment is
+    // kept, and an option with a saved edit is set aside rather than deleted, but either way it
+    // leaves this card, so say so before it happens.
+    const losing = workingDrafts.filter((d) => d.source !== "manual"
+      && ((d.edited_text && d.edited_text !== d.text) || d.status === "drafted" || d.status === "approved"));
+    if (losing.length && !window.confirm(
+      "Regenerate replaces the current options, including one that's been edited, moved to draft or approved. Continue?"
+    )) return;
     setDrafting(true);
     try {
       const drafts = await api.draftReply(post.id);
@@ -379,7 +398,7 @@ export default function PostCard({ post, onActioned }) {
         </div>
       )}
 
-      {workingDrafts.length === 0 && !postedDraft && (
+      {!workingDrafts.some((d) => d.source !== "manual") && !postedDraft && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             onClick={handleDraftReply}
@@ -396,7 +415,7 @@ export default function PostCard({ post, onActioned }) {
           >
             {drafting ? "Drafting…" : "Draft reply"}
           </button>
-          {!composing && writeOwnButton}
+          {workingDrafts.length === 0 && !composing && writeOwnButton}
         </div>
       )}
 
@@ -410,7 +429,7 @@ export default function PostCard({ post, onActioned }) {
           // What the box shows: an in-progress edit, else the saved edit, else the
           // generated text. "dirty" = the box differs from what's persisted.
           const shown = editedText[draft.id] ?? draft.edited_text ?? draft.text;
-          const dirty = shown !== (draft.edited_text ?? draft.text);
+          const dirty = shown !== (serverText[draft.id] ?? draft.edited_text ?? draft.text);
           const edited = !!(draft.edited_text && draft.edited_text !== draft.text);
           const manual = draft.source === "manual";
           return (
@@ -449,7 +468,7 @@ export default function PostCard({ post, onActioned }) {
             />
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
               {dirty
-                ? "Unsaved changes — click Save edit to keep them."
+                ? "Unsaved changes, not fact-checked yet. Click Save edit to keep them."
                 : edited
                 ? "Edited and saved."
                 : "You can edit this text directly, then Save edit."}
@@ -459,7 +478,7 @@ export default function PostCard({ post, onActioned }) {
                 tool never rewrites a human's text (the server refuses it too). */}
             {!manual && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-              {TWEAKS.map(([label, chip]) => (
+              {TWEAKS.filter(([, chip]) => !(chip === "angle" && draft.status === "approved")).map(([label, chip]) => (
                 <button
                   key={chip}
                   disabled={refining === draft.id}
@@ -500,6 +519,7 @@ export default function PostCard({ post, onActioned }) {
               verifying={verifying === draft.id}
               onVerify={() => handleVerify(draft.id)}
               stale={staleByDraft[draft.id] ?? draft.provenance_stale}
+              checkFailed={checkFailed[draft.id] ?? draft.check_failed}
               rechecking={rechecking === draft.id}
               onRecheck={() => handleRecheck(draft.id)}
             />
@@ -539,7 +559,7 @@ export default function PostCard({ post, onActioned }) {
               <button
                 onClick={handleDraftReply}
                 disabled={drafting || refining === draft.id}
-                title="Generate fresh options (a comment you wrote yourself is kept)"
+                title="Replace these options with fresh ones (a comment you wrote yourself stays)"
                 style={{
                   padding: "6px 12px",
                   borderRadius: 6,
@@ -678,6 +698,11 @@ export default function PostCard({ post, onActioned }) {
           </div>
           );
         })}
+
+      {/* "Write my own" sits under the options when there are any; with none, it sits beside
+          "Draft reply" above. One composer serves both. */}
+      {workingDrafts.length > 0 && !composing && <div style={{ marginTop: 10 }}>{writeOwnButton}</div>}
+      {composing && composer}
     </div>
   );
 }
@@ -688,29 +713,40 @@ const Dot = ({ c }) => (
 
 // Clinical-safety trace, briefly: one status line, then only the claims that need
 // a look. Grounded/general points aren't listed — the reassurance is the summary.
-function ProvenancePanel({ segments, verifying, onVerify, stale, rechecking, onRecheck }) {
+function ProvenancePanel({ segments, verifying, onVerify, stale, checkFailed, rechecking, onRecheck }) {
   if (!Array.isArray(segments) || segments.length === 0) return null;
+  const recheckButton = rechecking ? (
+    <span style={{ marginLeft: 8, fontStyle: "italic" }}>checking…</span>
+  ) : onRecheck && (
+    <button
+      onClick={onRecheck}
+      title="Fact-check the text as it is now"
+      style={{
+        marginLeft: 8, padding: "1px 8px", fontSize: 11, cursor: "pointer",
+        border: "1px solid var(--primary)", borderRadius: 6,
+        background: "transparent", color: "var(--primary)", fontWeight: 600,
+      }}
+    >
+      Re-check
+    </button>
+  );
+  // The check itself did not run (timeout or a malformed answer). Nothing was found, so there is
+  // nothing to web-search: the only useful action is to run the check again.
+  if (checkFailed) {
+    return (
+      <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
+        <Dot c="#f79009" />The fact-check didn't run. Check this one yourself, or run it again.
+        {recheckButton}
+      </div>
+    );
+  }
   // The check ran on an earlier version of this text. Say so instead of showing a result that no
   // longer applies: an edit is exactly where a new claim gets typed in.
   if (stale) {
     return (
       <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
         <Dot c="#f79009" />Edited since the fact-check.
-        {rechecking ? (
-          <span style={{ marginLeft: 8, fontStyle: "italic" }}>checking…</span>
-        ) : onRecheck && (
-          <button
-            onClick={onRecheck}
-            title="Fact-check the text as it is now"
-            style={{
-              marginLeft: 8, padding: "1px 8px", fontSize: 11, cursor: "pointer",
-              border: "1px solid var(--primary)", borderRadius: 6,
-              background: "transparent", color: "var(--primary)", fontWeight: 600,
-            }}
-          >
-            Re-check
-          </button>
-        )}
+        {recheckButton}
       </div>
     );
   }
@@ -763,10 +799,6 @@ function ProvenancePanel({ segments, verifying, onVerify, stale, rechecking, onR
           </div>
         );
       })}
-
-      {/* "Write my own" sits under the options, and is the only way to start one when options exist. */}
-      {workingDrafts.length > 0 && !composing && <div style={{ marginTop: 10 }}>{writeOwnButton}</div>}
-      {composing && composer}
     </div>
   );
 }

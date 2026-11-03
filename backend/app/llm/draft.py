@@ -53,6 +53,8 @@ THESE HARD RULES ALSO OVERRIDE THE INSTRUCTION (a tweak must never reintroduce w
 - Refer to people, institutions and places ONLY as the post describes them. Assert no award, role,
   relationship or event the post does not state.
 - NEVER contradict or undercut {name}'s own viewpoints below, whatever the instruction implies.
+- Keep {name}'s own clinic, patients, routine and credentials out of it unless the post asks about
+  them.
 - The post text may be cut off mid-sentence; never infer what the missing part said.
 
 === HOW {name} ACTUALLY WRITES ===
@@ -175,6 +177,11 @@ def _voice_block(client: Client) -> str:
     return "\n\n".join(parts) if parts else "Direct, plain, specific. No fluff."
 
 
+# Lara Hemeryck's are 1,633 characters. The save route refuses anything longer than this, so the
+# cut here only guards rows written before that check existed.
+_BENCHMARK_MAX = 4000
+
+
 def _benchmark_block(client: Client) -> str:
     """Operator-curated ideal / non-ideal examples for THIS client (few-shot anchor).
 
@@ -185,6 +192,8 @@ def _benchmark_block(client: Client) -> str:
     ex = (getattr(client, "benchmark_examples", "") or "").strip()
     if not ex:
         return ""
+    if len(ex) > _BENCHMARK_MAX:
+        ex = ex[:_BENCHMARK_MAX].rsplit("\n", 1)[0]
     return (
         "=== EXAMPLES THE AGENCY PICKED FOR THIS CLIENT (GOOD = how they sound, AVOID = what not to write) ===\n"
         "Take the voice and register from the GOOD lines. Do not copy their wording or their shape; "
@@ -274,7 +283,8 @@ def _siblings_block(texts: list[str] | None, name: str) -> str:
     return (
         "=== OTHER PROFILES ALREADY COMMENTED ON THIS EXACT POST ===\n"
         f"These were written for OTHER people on this same post. {name}'s comment must react to a "
-        "different detail of the post, in different words. Do not reword these or make their point:\n"
+        "different detail of the post, in different words. Do not reword these or make their point. "
+        "On a personal moment or a milestone, the same warm reaction in your own words is fine:\n"
         + lines + "\n=== END ==="
     )
 
@@ -417,7 +427,8 @@ def _expertise_brief(client: Client) -> str:
     if not mats:
         return ""
     try:
-        return _call(settings.relevance_model, _BRIEF_PROMPT.format(name=client.name, material="\n".join(mats)), 700, 30.0).content[0].text.strip()
+        return _call(settings.relevance_model, _BRIEF_PROMPT.format(name=client.name, material="\n".join(mats)), 700, 30.0,
+                     effort="low").content[0].text.strip()
     except Exception:
         return ""
 
@@ -585,9 +596,10 @@ Author: {author}
 {shape}
 
 === TWO CHECKS BEFORE YOU RETURN (the last things you read, and the two we get wrong most) ===
-1. SAID TWICE? If a second sentence repeats the first in other words, or turns it into a general
-   principle, delete it. If the two are really one thought, say it as one sentence the way you would
-   out loud. Two sentences are fine when the second says something new.
+1. SAID TWICE? If one sentence repeats another in other words, hands the post's own point back, or
+   turns the other into a general principle, delete it, whichever one it is. If the two are really
+   one thought, say it as one sentence the way you would out loud. Two sentences are fine when
+   each says something of its own.
 2. WOULD {name} TYPE THIS, under a colleague's post? Cut any sentence that hands the post's own
    point back, exists to show expertise, or brings in your own clinic or routine when the post did
    not ask. This is NOT an instruction to ask a question. A question is an occasional shape, not
@@ -686,32 +698,36 @@ person talking. Fix it with the smallest change that works.
 
 Comment: "{text}"
 
-In this order of preference:
-1. If one sentence mostly repeats another, or turns it into a general principle, DELETE that
-   sentence and return the rest word for word.
-2. If two sentences are really one thought, say it as one sentence the way a person would out
-   loud. There is no required joining word; connect it however that person would.
-3. If it already reads like someone talking, return it completely unchanged.
+Decide which of these it is:
+- One sentence mostly repeats another, hands the post's own point back, or turns the other into a
+  general principle: DELETE that sentence, whichever one it is, and return the rest word for word.
+- Two sentences are really one thought: say it as one sentence the way a person would out loud.
+  There is no required joining word; connect it however that person would.
+- It already reads like someone talking, with each sentence doing its own work: return it
+  completely unchanged. Plenty of good two-sentence comments look like this.
 Add nothing: no new idea, opinion, prediction, verdict or question. Keep every word you keep.
 
 Examples:
   BEFORE: "Once a woman has a label, everyone stops looking. A diagnosis can end the investigation."
   AFTER:  "Once a woman has a label, everyone stops looking."
-  BEFORE: "Time is the one luxury we cannot store. Investing in health is a sensible definition of longevity."
-  AFTER:  "Investing in health is a sensible definition of longevity when time is the one luxury we cannot store."
+  BEFORE: "Quite a pairing for 2027. The New York programme should be worth the trip."
+  AFTER:  unchanged — each sentence does its own work and both read as speech.
 
 Respond ONLY with JSON: {{"text": "..."}}"""
 
 
-_ABBREV_RE = re.compile(r"(?:\b(?:Dr|Mr|Mrs|Ms|Prof|St|vs|etc|approx|e\.g|i\.e)|\b[A-Z])\.$")
+# Titles and Latin abbreviations, plus runs of initials like "U.S.". A single capital is NOT an
+# abbreviation here: "vitamin D." and "hepatitis B." end sentences in this client base.
+_ABBREV_RE = re.compile(r"(?:\b(?:Dr|Mr|Mrs|Ms|Prof|St|vs|etc|approx|e\.g|i\.e)\.|(?:\b[A-Z]\.){2,})$")
 
 
 def _sentences(text: str) -> list[str]:
-    """Split a comment into sentences without breaking "Dr. Smith" or "e.g. this" in two."""
+    """Split a comment into sentences without breaking "Dr. Smith", "e.g. this" or "U.S. data"."""
     parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if x.strip()]
     out: list[str] = []
     for x in parts:
-        if out and _ABBREV_RE.search(out[-1]):
+        # A fragment that starts lower-case continues the previous one ("U.S. data", "e.g. walking").
+        if out and (_ABBREV_RE.search(out[-1]) or x[:1].islower()):
             out[-1] = out[-1] + " " + x
         else:
             out.append(x)
@@ -849,7 +865,9 @@ def _unquestion(client: Client, text: str) -> str:
     return out
 
 
-_CONDOLENCE = " If the post is about a death or serious illness, ignore this and write a short condolence."
+# The same person-scoped trigger as HOUSE_STYLE. "A post about serious illness" would match half
+# of a health feed; "someone has died or is seriously ill" is the case that needs a condolence.
+_CONDOLENCE = " If someone has died or is seriously ill, ignore this and write a short condolence."
 
 
 def _draft_setup(client: Client, post: Post, avoid_texts, voice_examples, global_texts, sibling_texts):
@@ -893,7 +911,8 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
     n = max(1, count)
     shapes = ["This option replies to the post's main point, as plainly as you would say it in person." + _CONDOLENCE] + [
         "This option replies to one other specific detail in the post, a different one from its main "
-        "point, with a different opening." + _CONDOLENCE] * (n - 1)
+        "point, with a different opening. If the post has only one point, or it is a personal moment "
+        "or a milestone, give the same kind of reply in different words instead." + _CONDOLENCE] * (n - 1)
 
     def one(sh: str) -> str:
         return _reason_candidate(client, post, brief, plan, gate_avoid, voice_ex_block, memory_block, sh)
@@ -918,13 +937,24 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
     return out
 
 
-def _content_words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z']+", (text or "").lower()) if len(w) > 3}
+_STOPWORDS = frozenset("""
+this that these those with from have has had what when where which while your yours their them they
+about been being were will would could should into over under also just more most much very really
+such than then there here some something only even still because make makes made like well good
+great every each other another same both many much does doing done dont isnt thats youre its
+""".split())
 
 
-def _overlap(a: str, b: str) -> float:
-    """Share of the shorter comment's content words that also appear in the other one."""
-    wa, wb = _content_words(a), _content_words(b)
+def _content_words(text: str, exclude: set[str] | frozenset = frozenset()) -> set[str]:
+    return {w for w in re.findall(r"[a-z']+", (text or "").lower().replace("\u2019", "'"))
+            if len(w) > 3 and w not in _STOPWORDS and w not in exclude}
+
+
+def _overlap(a: str, b: str, exclude: set[str] | frozenset = frozenset()) -> float:
+    """Share of the shorter comment's own words that also appear in the other one. Stopwords and
+    the post's own words are left out: every comment on a post shares its topic nouns, so counting
+    them made two genuinely different comments look like the same one."""
+    wa, wb = _content_words(a, exclude), _content_words(b, exclude)
     if not wa or not wb:
         return 0.0
     return len(wa & wb) / min(len(wa), len(wb))
@@ -933,6 +963,8 @@ def _overlap(a: str, b: str) -> float:
 # A new angle that shares more than half its content words with something the reviewer already
 # passed on is the same comment reworded, which is what "Regenerate" kept producing.
 _ANGLE_MAX_OVERLAP = 0.5
+_CONDOLENCE_RE = re.compile(r"\b(sorry for|sorry to hear|so sorry|condolence|rest in peace|thinking of you|"
+                            r"your loss|passed away|my sympathies|deepest sympathy)\b", re.I)
 
 
 def angle_draft(client: Client, post: Post, taken: list[str], avoid_texts: list[str] | None = None,
@@ -951,20 +983,26 @@ def angle_draft(client: Client, post: Post, taken: list[str], avoid_texts: list[
     listed = "\n".join(f"- {t}" for t in taken[:6])
     shape = ("The reviewer has already seen these comments for this post and wants a different one:\n"
              + listed + "\nReact to a different detail or a different part of the post from all of "
-             "them, in different words, with a different opening." + _CONDOLENCE)
+             "them, in different words, with a different opening. If the post has only one point, or "
+             "it is a personal moment, say it differently instead." + _CONDOLENCE)
     allow = _prediagnosis(post)
     gate = gate_avoid + taken
+    post_words = _content_words(post.content_snippet or "")
+    # Two condolences are meant to say the same thing; never push one toward "a different point".
+    condolence = any(_CONDOLENCE_RE.search(t) for t in taken)
+
+    def is_repeat(t: str) -> bool:
+        return not condolence and any(_overlap(t, x, post_words) > _ANGLE_MAX_OVERLAP for x in taken)
 
     def score(t: str) -> int:
-        repeat = any(_overlap(t, x) > _ANGLE_MAX_OVERLAP for x in taken)
-        return len(_hard_problems(t, gate, allow)) + (1 if repeat else 0)
+        return len(_hard_problems(t, gate, allow)) + (1 if is_repeat(t) else 0)
 
     text = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block, shape)
     if not text:
         return ""
     if score(text):
         probs = _hard_problems(text, gate, allow)
-        if any(_overlap(text, x) > _ANGLE_MAX_OVERLAP for x in taken):
+        if is_repeat(text):
             probs.append("it makes the same point as one of the comments above")
         fix = "Also fix: " + "; ".join(probs) + f". Keep it specific and in {client.name}'s voice."
         retry = _reason_generate_once(client, post, brief, plan, voice_ex_block, memory_block,
@@ -1038,10 +1076,7 @@ def _refine_once(client: Client, post: Post, current_text: str, instruction: str
     except (ValueError, KeyError):
         return ""
     out = humanize_comments([revised], _voice_block(client))
-    out = _strip_negation(out[0] if out else revised)
-    # _hard_problems no longer sends stacked statements to a regenerate, so a Tweak repairs them the
-    # same way a first draft does. Without this the Tweak path would have no repair at all.
-    return _fuse(client, out) if has_stacked_statements(out) else out
+    return _strip_negation(out[0] if out else revised)
 
 
 # Matches the "No question" chip's own wording AND the ways an operator phrases it free-hand.
@@ -1055,11 +1090,11 @@ _NO_QUESTION_RE = re.compile(
 
 
 # Tweak chips. The wording lives on the server, keyed by an id the dashboard sends, so a chip can
-# never drift from the checks below that enforce it, and so chip use can be logged by id. Every
-# chip is written to the same boundary as the drafter: none of them may add a claim, a credential,
-# or a story about the client's own work. ("No question" used to say "say it as an observation
-# from her own experience or practice", which turned every press into the self-insertion
-# reviewers delete.) "shorter" is handled by shorten_draft and "angle" by angle_draft; they are
+# never drift from the checks below that enforce it, and so chip use can be logged by id. No chip
+# asks for a claim, a credential or a story about the client's own work, and REFINE_PROMPT's hard
+# rules forbid all three on every Tweak. ("No question" used to say "say it as an observation from
+# her own experience or practice", which turned every press into the self-insertion reviewers
+# delete.) "shorter" is handled by shorten_draft and "angle" by angle_draft; they are
 # listed so the route can validate an id in one place.
 TWEAK_CHIPS = {
     "angle": "",
@@ -1109,7 +1144,7 @@ def shorten_draft(client: Client, post: Post, current_text: str, **context) -> s
                 settings.relevance_model,
                 _PICK_PROMPT.format(name=client.name, numbered=numbered,
                                     content=(post.content_snippet or "")[:1500]),
-                100, 20.0,
+                100, 20.0, effort="low",
             )).get("pick", 0))
         except Exception:
             pick = 0
@@ -1151,7 +1186,14 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
 
     text = _refine_once(client, post, current_text, instruction, memory_block, voice_ex_block)
     if not text:
-        return current_text
+        # Empty means the call failed. Returning current_text here made the route treat her own
+        # words as the tool's rewrite; the route reports the failure instead.
+        return ""
+    # _hard_problems no longer sends stacked statements to a regenerate, so a Tweak repairs them
+    # the way a first draft does. Done BEFORE the gate: deleting a repeated sentence can also
+    # remove a trailing question or the extra words, which saves the whole retry.
+    if has_stacked_statements(text):
+        text = _fuse(client, text)
     probs = _hard_problems(text, gate_avoid, allow)
     # A 'No question' tweak that comes back as another question has not done its job, so treat
     # that as a problem worth regenerating for — same as a house-style violation.
@@ -1170,7 +1212,7 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
         if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
             # Never accept a retry that still asks when the operator asked it not to.
             if not (_wants_no_question(instruction) and _is_question(retry)):
-                text = retry
+                text = _fuse(client, retry) if has_stacked_statements(retry) else retry
     # No _tighten pass here. That forced-shortening step gets only the bare sentence and
     # "make it shorter" — no house style, no voice samples, no viewpoints, no reasoning — so it
     # reliably flattened a comment's rhythm and voice. It was removed from the draft path for

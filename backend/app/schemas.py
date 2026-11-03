@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ClientOut(BaseModel):
@@ -42,7 +42,8 @@ class ClientCreate(BaseModel):
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
     personal_story: Optional[str] = None
-    benchmark_examples: Optional[str] = None
+    # Reaches every first draft for this client. A limit, so a pasted prompt can't swamp it.
+    benchmark_examples: Optional[str] = Field(default=None, max_length=4000)
 
 
 class ClientUpdate(BaseModel):
@@ -60,7 +61,8 @@ class ClientUpdate(BaseModel):
     cta_rules: Optional[str] = None
     guardrails: Optional[str] = None
     personal_story: Optional[str] = None
-    benchmark_examples: Optional[str] = None
+    # Reaches every first draft for this client. A limit, so a pasted prompt can't swamp it.
+    benchmark_examples: Optional[str] = Field(default=None, max_length=4000)
 
 
 class ResolveCreatorRequest(BaseModel):
@@ -189,6 +191,7 @@ class DraftOut(BaseModel):
     status: str
     source: str = "generated"
     provenance_stale: bool = False
+    check_failed: bool = False
 
     class Config:
         from_attributes = True

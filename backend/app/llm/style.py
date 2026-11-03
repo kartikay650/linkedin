@@ -75,8 +75,8 @@ same thought, said twice, at two altitudes. That is what makes a comment sound m
   HUMAN:   "Good to see mental health counted as part of longevity, the stress ends up in the body
             anyway."
 So DECIDE, for this specific post:
-- Does a second sentence repeat the first, or turn it into a general principle? Delete it. One good
-  sentence is a complete comment.
+- Does one sentence repeat another, hand the post's own point back, or turn the other into a general
+  principle? Delete it, whichever one it is. One good sentence is a complete comment.
 - Are the two really one thought? Say it as one sentence, with the clauses hanging together the way
   they would out loud.
 - Two sentences are right when the second says something new: a consequence, a turn, a concession,
@@ -110,7 +110,7 @@ COMMENT SHAPES — pick the one that fits, rotate, never default to one. Most co
 BEFORE RETURNING, run these tests and rewrite if it fails any:
 - Structure test: is it the nominalized-insight formula? Say it plainly instead.
 - Specificity test: could it sit under any post in the niche? Make it about this post, without handing the post's own words back.
-- Repeat test: does a second sentence say the first one again? Delete it.
+- Repeat test: do two sentences say the same thing? Delete the one that adds less.
 - Spoken test: read it aloud. If it reads written, rewrite it plainer.
 === END HOUSE STYLE ==="""
 

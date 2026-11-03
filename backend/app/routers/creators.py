@@ -7,6 +7,7 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -36,6 +37,16 @@ def add_creator(payload: CreatorCreate, db: Session = Depends(get_db)):
     # profile, and not normalising them is how Gordan Lauc ended up with two creator rows.
     url = re.sub(r"^https?://[a-z]{2,3}\.linkedin\.com/", "https://www.linkedin.com/", url, flags=re.I)
     existing = db.query(Creator).filter(Creator.profile_url == url).first()
+    if existing is None:
+        # Rows saved before the host was normalised still carry a country subdomain, so match the
+        # handle on any LinkedIn host too. Without this, normalising the input made a re-add of
+        # such a profile miss its own row and create a duplicate.
+        m = re.search(r"linkedin\.com/in/([^/?#]+)/", url, re.I)
+        if m:
+            handle = m.group(1).lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            existing = (db.query(Creator)
+                        .filter(func.lower(Creator.profile_url).like(f"%linkedin.com/in/{handle}/%", escape="\\"))
+                        .order_by(Creator.id).first())
     if existing:
         # Adding someone who already exists as a prospect, to track them, must start fetching
         # them. This used to return the prospect row untouched: the client modal assigned it and

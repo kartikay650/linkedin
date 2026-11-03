@@ -77,8 +77,12 @@ def _record_usage(u):
 
 
 class _Messages:
-    def __init__(self, timeout):
+    def __init__(self, timeout, max_retries=None):
         self._timeout = timeout
+        # Attempts = 1 + max_retries. None keeps the old default of three attempts. This used to
+        # be ignored, so a caller asking for one attempt (to fit a 25s check inside a 60s request)
+        # still got three: 3 x 25s + sleeps = ~76s, past the serverless limit.
+        self._attempts = 3 if max_retries is None else 1 + max(0, int(max_retries))
 
     def create(self, model=None, max_tokens=800, messages=None, extra_body=None,
                effort=None, **kw):
@@ -107,7 +111,9 @@ class _Messages:
         # Keep the retry budget SMALL: this runs inside a 60s serverless request, and a long
         # retry ladder is what pushes a draft over the edge. 3 attempts with short backoff.
         last = ""
-        for attempt in range(3):
+        attempt, dropped_effort = 0, False
+        while attempt < self._attempts:
+            attempt += 1
             try:
                 r = httpx.post(url, json=body, headers=headers, timeout=self._timeout)
                 if r.status_code == 200:
@@ -117,19 +123,24 @@ class _Messages:
                     # content_filter / length with empty content -> "" -> caller falls back
                     return ch["message"].get("content") or ""
                 msg = r.text[:200]
-                # a deployment that rejects reasoning_effort: drop it and retry once
-                if r.status_code == 400 and "reasoning_effort" in msg and "reasoning_effort" in body:
+                # a deployment that rejects reasoning_effort: drop it and retry once. This is a
+                # request fix, not a failure, so it does not use up an attempt.
+                if r.status_code == 400 and "reasoning_effort" in msg and not dropped_effort:
                     body = {k: v for k, v in body.items() if k != "reasoning_effort"}
+                    dropped_effort = True
+                    attempt -= 1
                     continue
                 if r.status_code in (429, 500, 502, 503):
-                    time.sleep(0.8 * (attempt + 1))
+                    if attempt < self._attempts:
+                        time.sleep(0.8 * attempt)
                     last = msg
                     continue
                 print(f"[llm] HTTP {r.status_code}: {msg}")
                 return ""
-            except Exception as ex:  # network / timeout — one quick retry, then give up
+            except Exception as ex:  # network / timeout — retry while attempts remain
                 last = f"{type(ex).__name__}: {ex}"
-                time.sleep(0.5)
+                if attempt < self._attempts:
+                    time.sleep(0.5)
                 continue
         print(f"[llm] gave up after retries: {last}")
         return ""
@@ -137,8 +148,8 @@ class _Messages:
 
 class AzureClient:
     """Drop-in for `anthropic.Anthropic(api_key=...)`."""
-    def __init__(self, api_key=None, timeout=45.0, **kw):
-        self.messages = _Messages(timeout)
+    def __init__(self, api_key=None, timeout=45.0, max_retries=None, **kw):
+        self.messages = _Messages(timeout, max_retries)
 
     def with_options(self, timeout=None, max_retries=None, **kw):
-        return AzureClient(timeout=timeout or 45.0)
+        return AzureClient(timeout=timeout or 45.0, max_retries=max_retries)

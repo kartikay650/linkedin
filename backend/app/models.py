@@ -309,6 +309,14 @@ class Draft(Base):
     post = relationship("Post", back_populates="drafts")
 
     @property
+    def check_failed(self) -> bool:
+        """True when the stored fact-check is the 'did not run' marker, not a result. The card
+        then offers Re-check instead of "Check sources", which would web-search the whole comment
+        as if it were one claim and could mark a check that never ran as grounded."""
+        segs = self.provenance if isinstance(self.provenance, list) else []
+        return any(CHECK_FAILED_NOTE in (s.get("note") or "") for s in segs if isinstance(s, dict))
+
+    @property
     def provenance_stale(self) -> bool:
         """True when the text on the card is not the text the fact-check ran on."""
         shown = self.edited_text or self.text or ""
@@ -322,6 +330,9 @@ class Draft(Base):
 def text_hash(text: str) -> str:
     import hashlib
     return hashlib.sha1(" ".join((text or "").split()).encode("utf-8")).hexdigest()
+
+
+CHECK_FAILED_NOTE = "safety check did not run — please verify this manually before posting"
 
 
 class TweakEvent(Base):

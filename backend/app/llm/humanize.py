@@ -55,14 +55,14 @@ an AI tic; state the point plainly, and only hedge when genuinely needed, varyin
 construction — say the underlying idea a different way or drop it. Nuance means not overstating the evidence, not \
 sprinkling hedge words. Do not pad or trim a draft to a word count; the length was chosen for this post.
 
-SAID TWICE. This is the thing that most makes our comments read as machine-written. When a draft's second \
-sentence mostly re-says or generalises the first, DELETE it. When two short statements are really one thought, \
-say them as one sentence the way a person would; there is no required joining word. Leave two sentences alone \
-when each does different work and both already read as speech. \
+SAID TWICE. This is the thing that most makes our comments read as machine-written. When one sentence \
+mostly re-says another, hands the post's own point back, or generalises the other into a principle, DELETE it, \
+whichever one it is. When two short statements are really one thought, say them as one sentence the way a person \
+would; there is no required joining word. Leave two sentences alone when each does different work and both already \
+read as speech. \
   REPEATS: "Once a woman has a label, everyone stops looking. A diagnosis can end the investigation." \
   FIXED:   "Once a woman has a label, everyone stops looking." \
-  ONE THOUGHT: "Time is the one luxury we cannot store. Investing in health is a sensible definition of longevity." \
-  FIXED:       "Investing in health is a sensible definition of longevity when time is the one luxury we cannot store." \
+  LEAVE IT: "Quite a pairing for 2027. The New York programme should be worth the trip." \
 No emoji unless the voice explicitly uses them.
 
 Match this person's voice:

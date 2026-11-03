@@ -27,8 +27,9 @@ _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 # Marker used when the safety pass itself failed (timeout / parse error) rather than finding a
 # real claim. Surfaced to the reviewer as unverified (fail closed), but callers must NOT try to
-# "fix" the draft off it — there is nothing to fix, the check simply did not run.
-CHECK_FAILED_NOTE = "safety check did not run — please verify this manually before posting"
+# "fix" the draft off it — there is nothing to fix, the check simply did not run. Defined on the
+# model so Draft.check_failed can read it without importing this module.
+from app.models import CHECK_FAILED_NOTE  # noqa: E402  (re-exported)
 
 
 def _json_from_all_text(message) -> dict:
@@ -49,12 +50,12 @@ _client = AzureClient()
 
 
 def _grounding(client: Client, docs_text: str = "") -> str:
-    """Everything we treat as 'her own material' — the source of truth a claim
+    """Everything we treat as the client's own material — the source of truth a claim
     can be grounded against."""
     parts = []
     for label, val in [
-        ("Her voice samples", client.voice_samples),
-        ("Her viewpoints / stances", client.viewpoints),
+        ("Their voice samples", client.voice_samples),
+        ("Their viewpoints / stances", client.viewpoints),
         ("Key messages / proof points", client.key_messages),
         ("Guardrails", client.guardrails),
     ]:
@@ -128,19 +129,50 @@ def annotate_provenance(client: Client, post: Post, reply: str, docs_text: str =
         # Now a failed check reads as unverified, so it looks suspicious rather than clean.
         # `CHECK_FAILED_NOTE` lets the draft route tell "we couldn't check" apart from "we found a
         # claim", so it never rewrites a draft on the basis of a check that never ran.
-        return [{"text": reply, "level": "unverified", "note": CHECK_FAILED_NOTE, "source_url": ""}]
+        return _check_failed(reply)
     # Guard: only keep well-formed spans.
     out = []
     for s in segments:
         if isinstance(s, dict) and s.get("text"):
-            lvl = s.get("level")
+            lvl = str(s.get("level") or "").strip().lower()
+            if lvl not in ("grounded", "general", "unverified"):
+                # An answer we can't read is a check that didn't happen. This used to become
+                # "general", which the card shows as "Nothing to verify".
+                return _check_failed(reply)
             out.append({
                 "text": str(s["text"]),
-                "level": lvl if lvl in ("grounded", "general", "unverified") else "general",
+                "level": lvl,
                 "note": str(s.get("note", "")),
                 "source_url": s.get("source_url", ""),
             })
-    return out or [{"text": reply, "level": "general", "note": ""}]
+    # Fail closed when the spans don't cover the comment: the uncovered part was never classified.
+    # On 399 real checks the spans covered 100% of the comment's words, so 90% never trips on a
+    # good answer.
+    if not out or _coverage(reply, out) < 0.9:
+        return _check_failed(reply)
+    return out
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (text or "").lower().replace("\u2019", "'"))
+
+
+def _coverage(reply: str, spans: list[dict]) -> float:
+    words = _words(reply)
+    if not words:
+        return 1.0
+    have = set(_words(" ".join(s["text"] for s in spans)))
+    return sum(1 for w in words if w in have) / len(words)
+
+
+def _check_failed(reply: str) -> list[dict]:
+    return [{"text": reply, "level": "unverified", "note": CHECK_FAILED_NOTE, "source_url": ""}]
+
+
+def check_failed(provenance) -> bool:
+    """True when the stored fact-check is the 'did not run' marker rather than a result."""
+    return any(CHECK_FAILED_NOTE in (s.get("note") or "") for s in (provenance or [])
+               if isinstance(s, dict))
 
 
 VERIFY_PROMPT = """You are fact-checking claims in a health expert's LinkedIn comment before it is posted.

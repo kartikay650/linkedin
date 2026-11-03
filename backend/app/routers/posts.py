@@ -1,6 +1,7 @@
 import random
 import re
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,9 +10,9 @@ from sqlalchemy.orm import Session, aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
-from app.llm.draft import (TWEAK_CHIPS, angle_draft, generate_drafts, refine_draft, shorten_draft,
-                           strip_unverifiable)
-from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
+from app.llm.draft import (TWEAK_CHIPS, _sentences, angle_draft, generate_drafts, refine_draft,
+                           shorten_draft, strip_unverifiable)
+from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, check_failed, verify_claims
 from app.llm.style import check_violations
 from app.models import Client, ClientDocument, Draft, Post, TweakEvent, text_hash
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
@@ -224,7 +225,9 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
             d.provenance = [
                 {"level": s.get("level"),
                  "text": (s.get("text") or "")[:70],
-                 "source_url": s.get("source_url", "")}
+                 "source_url": s.get("source_url", ""),
+                 # The one note the card needs: "the check didn't run" (Draft.check_failed).
+                 **({"note": CHECK_FAILED_NOTE} if CHECK_FAILED_NOTE in (s.get("note") or "") else {})}
                 if s.get("level") in ("unverified", "contradicted")
                 else {"level": s.get("level")}
                 for s in segs if isinstance(s, dict)
@@ -349,6 +352,9 @@ def apify_usage():
 _SIGNOFF_RE = re.compile(r",\s+(?:Dr\.?\s+)?[A-Z][\w'\u2019-]+\.?\s*$")
 _MAX_EXAMPLES = 5
 _MIN_EXAMPLES = 3
+# An "edit" that keeps 90%+ of the tool's text (a dropped full stop, one word swapped) is the
+# tool's own output with a touch-up, and would teach the drafter its own patterns back.
+_NEAR_COPY = 0.9
 
 
 def _approved_examples(db: Session, post: Post) -> list[str]:
@@ -357,8 +363,8 @@ def _approved_examples(db: Session, post: Post) -> list[str]:
     The examples used to be the client's last 8 approved comments, edited or not. For Dr. Joe
     Raffaele all 8 were the tool's own unedited output, so the drafter was learning from itself and
     every pattern it had compounded. Now a comment qualifies only when:
-      - it was approved or posted, and someone changed its text first (edited_text differs from
-        what the tool last wrote);
+      - it was approved or posted, and someone substantively changed its text first (edited_text
+        keeps less than 90% of what the tool last wrote);
       - it is not paste-marked. Generated text never ends in whitespace, and about half of the
         posted edits do, which looks like a rewrite pasted in from elsewhere (ChatGPT is the open
         question in BACKLOG.md). Those are left out until that is answered;
@@ -381,6 +387,8 @@ def _approved_examples(db: Session, post: Post) -> list[str]:
             continue
         e = edited.strip()
         if norm(e) == norm(text) or e in picked:  # unedited tool output, or a duplicate
+            continue
+        if SequenceMatcher(None, norm(e), norm(text)).ratio() >= _NEAR_COPY:
             continue
         if _SIGNOFF_RE.search(e):
             continue
@@ -448,6 +456,30 @@ def _safety_pass(client: Client, post: Post, text: str, docs_text: str):
     return text, provenance
 
 
+def _checked_hash(provenance, text: str) -> str | None:
+    """The hash recording which text was fact-checked, or None when the check didn't run, so a
+    failed check is never mistaken for a fresh one."""
+    return None if check_failed(provenance) else text_hash(text)
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").split()).lower()
+
+
+def _human_edited(d: Draft) -> bool:
+    """Someone typed into this option: a hand-written comment, or a saved edit to a generated one."""
+    return d.source == "manual" or bool(d.edited_text and _norm(d.edited_text) != _norm(d.text))
+
+
+def _set_aside(db: Session, d: Draft) -> None:
+    """Remove an option from the card. Human writing is kept as a rejected row rather than
+    deleted, so a click on a different option can never destroy it; tool text is deleted."""
+    if _human_edited(d):
+        d.status = "rejected"
+    else:
+        db.delete(d)
+
+
 def _log_tweak(db: Session, draft: Draft, post: Post, chip: str | None, instruction: str,
                before: str) -> None:
     db.add(TweakEvent(client_id=post.client_id, post_id=post.id, draft_id=draft.id, chip=chip,
@@ -493,12 +525,16 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
     if not texts:
         raise HTTPException(502, "draft generation failed — try again")
 
-    # Replace any existing non-posted GENERATED drafts so regenerating never stacks up copies. A
-    # comment the reviewer wrote by hand is kept: Regenerate is a request for new tool options,
-    # never for deleting her own writing.
+    # Replace any existing non-posted GENERATED options so regenerating never stacks up copies. A
+    # comment the reviewer wrote by hand stays on the card: Regenerate asks for new tool options,
+    # never for deleting her writing. A generated option she edited leaves the card but is kept
+    # as a rejected row rather than deleted (the dashboard asks before it happens).
     for d in list(post.drafts):
-        if d.status != "posted" and d.source != "manual":
-            db.delete(d)
+        if d.status == "posted" or d.source == "manual":
+            continue
+        if d.status == "rejected" and _human_edited(d):
+            continue
+        _set_aside(db, d)
     db.flush()
 
     docs_text = _docs_text(db, post.client_id)
@@ -526,7 +562,7 @@ def draft_reply(post_id: int, db: Session = Depends(get_db)):
         # handed to the reviewer as "AI could not get this one right". The label also misfired on
         # genuinely good short replies, which cost more trust than it saved.
         draft = Draft(post_id=post.id, variant_index=i, text=text, original_text=text,
-                      provenance=provenance, provenance_hash=text_hash(text))
+                      provenance=provenance, provenance_hash=_checked_hash(provenance, text))
         db.add(draft)
         created.append(draft)
     db.commit()
@@ -565,16 +601,27 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
         revised = shorten_draft(post.client, post, current, **context)
     else:
         revised = refine_draft(post.client, post, current, instruction, **context)
-    # Enforce "nothing to fact-check" on the TWEAK path too. A tweak is a prime way for an
-    # unverifiable claim to come back, and previously this route only re-labelled it.
-    revised, provenance = _safety_pass(post.client, post, revised, _docs_text(db, post.client_id))
+    if not (revised or "").strip():
+        # The model call failed. This used to hand back her own text as if it were the tweak,
+        # then run it through the fact-check rewrite and log a tweak that never happened.
+        raise HTTPException(502, "couldn't rewrite that one — try again")
+    if _norm(revised) == _norm(current):
+        return draft  # nothing to change (e.g. "No question" on a statement): leave it as it is
+    docs_text = _docs_text(db, post.client_id)
+    if draft.edited_text and _norm(revised) in {_norm(x) for x in _sentences(current)}:
+        # Shorter kept one of HER sentences word for word. Human text is flagged, never rewritten.
+        provenance = annotate_provenance(post.client, post, revised, docs_text)
+    else:
+        # Enforce "nothing to fact-check" on the TWEAK path too. A tweak is a prime way for an
+        # unverifiable claim to come back, and previously this route only re-labelled it.
+        revised, provenance = _safety_pass(post.client, post, revised, docs_text)
     _log_tweak(db, draft, post, chip, instruction, current)
     draft.text = revised
     # original_text is deliberately NOT touched here. It is the only record of what the tool
     # actually produced, and this line is what used to destroy it.
     draft.edited_text = None  # revised text supersedes prior manual edits
     draft.provenance = provenance
-    draft.provenance_hash = text_hash(revised)
+    draft.provenance_hash = _checked_hash(provenance, revised)
     db.commit()
     db.refresh(draft)
     return draft
@@ -592,6 +639,9 @@ def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
         raise HTTPException(409, "this comment is already posted on LinkedIn")
     if draft.source == "manual":
         raise HTTPException(409, "this comment was written by hand; edit it directly")
+    if draft.status == "approved":
+        # A different angle is a new comment the approver never saw, so it can't stay "approved".
+        raise HTTPException(409, "this comment is approved; move it back to draft for a new angle")
     post = db.get(Post, draft.post_id)
     current = draft.edited_text or draft.text
     taken = [current, draft.text, draft.original_text] + [
@@ -610,7 +660,7 @@ def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
     draft.original_text = text
     draft.edited_text = None
     draft.provenance = provenance
-    draft.provenance_hash = text_hash(text)
+    draft.provenance_hash = _checked_hash(provenance, text)
     db.commit()
     db.refresh(draft)
     return draft
@@ -639,6 +689,11 @@ def manual_draft(post_id: int, payload: ManualDraftRequest, db: Session = Depend
         raise HTTPException(422, "write the comment first")
     if len(text) > _MANUAL_MAX_CHARS:
         raise HTTPException(422, f"that's longer than a LinkedIn comment should be ({_MANUAL_MAX_CHARS} characters max)")
+    # Saving twice (a retry after a slow check timed out, a double click) returns the comment
+    # already saved instead of adding a duplicate option.
+    for d in post.drafts:
+        if d.source == "manual" and d.status == "pending" and _norm(d.text) == _norm(text):
+            return d
     used = [d.variant_index or 0 for d in post.drafts]
     draft = Draft(post_id=post.id, variant_index=(max(used) + 1) if used else 0, text=text,
                   original_text=None, source="manual", status="pending",
@@ -650,8 +705,7 @@ def manual_draft(post_id: int, payload: ManualDraftRequest, db: Session = Depend
     provenance = annotate_provenance(post.client, post, text, _docs_text(db, post.client_id),
                                      timeout=_LONE_CHECK_TIMEOUT, max_retries=0)
     draft.provenance = provenance
-    if not any(CHECK_FAILED_NOTE in (s.get("note") or "") for s in provenance):
-        draft.provenance_hash = text_hash(text)
+    draft.provenance_hash = _checked_hash(provenance, text)
     db.commit()
     db.refresh(draft)
     return draft
@@ -669,8 +723,7 @@ def recheck_draft(draft_id: int, db: Session = Depends(get_db)):
     provenance = annotate_provenance(post.client, post, shown, _docs_text(db, post.client_id),
                                      timeout=_LONE_CHECK_TIMEOUT, max_retries=0)
     draft.provenance = provenance
-    if not any(CHECK_FAILED_NOTE in (s.get("note") or "") for s in provenance):
-        draft.provenance_hash = text_hash(shown)
+    draft.provenance_hash = _checked_hash(provenance, shown)
     db.commit()
     db.refresh(draft)
     return draft
@@ -685,7 +738,10 @@ def verify_claims_route(draft_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "draft not found")
 
     segments = list(draft.provenance or [])
-    flagged_segs = [s for s in segments if s.get("level") == "unverified"][:2]
+    # The "check didn't run" marker is the whole comment, not a claim. Web-searching it as one
+    # claim could mark an unchecked comment "grounded"; Re-check is the fix for that state.
+    flagged_segs = [s for s in segments if s.get("level") == "unverified"
+                    and CHECK_FAILED_NOTE not in (s.get("note") or "")][:2]
     if not flagged_segs:
         return draft
 
@@ -738,7 +794,7 @@ def update_draft(draft_id: int, payload: DraftUpdate, db: Session = Depends(get_
             for sib in db.query(Draft).filter(
                 Draft.post_id == draft.post_id, Draft.id != draft.id, Draft.status == "pending"
             ).all():
-                db.delete(sib)
+                _set_aside(db, sib)  # a hand-written or edited option is kept as rejected
 
     db.commit()
     db.refresh(draft)
