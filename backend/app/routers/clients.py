@@ -215,6 +215,11 @@ def add_feedback(client_id: int, payload: ClientFeedbackCreate, db: Session = De
     note = (payload.note or "").strip()
     if not note:
         raise HTTPException(400, "note is empty")
+    # The same pasted prompt was saved 92 times. Refuse an exact repeat rather than stacking it.
+    norm = " ".join(note.split()).lower()
+    for existing in db.query(ClientFeedback).filter(ClientFeedback.client_id == client_id).all():
+        if " ".join((existing.note or "").split()).lower() == norm:
+            raise HTTPException(409, "That note is already saved for this client.")
     fb = ClientFeedback(client_id=client_id, note=note)
     db.add(fb)
     db.commit()

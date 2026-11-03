@@ -31,7 +31,7 @@ Remove these AI tells (from the "signs of AI writing" guide):
 
 Also remove these LinkedIn-comment tells specifically:
 - Exclamation points. No exclamation points at all.
-- The author's name at the start. Names go at the end after a comma, only when natural.
+- The author's name at the start, or tacked onto the end after a comma as a sign-off. Most comments need no name at all; if one genuinely helps, it goes where it would fall in speech, often mid-sentence.
 - Praise / summary openers: "Great post", "Great point", "Love this", "Insightful", "Absolutely", "Couldn't agree more", "What stood out to me is", "You make a great point about".
 - Evaluating how the post was written ("the way you've framed this", "you've articulated this", "your observation about X"). React to the idea, not the author's performance.
 - The nominalized-insight formula: [abstract noun phrase wrapping the post] + is + [meta-claim about what most people/frameworks miss, or how significant it is]. This is the single most common tell. It includes openers like "The idea that...", "The gap between X and Y...", "The question of whether...", "The distinction between X and Y...", "That gap between X and Y is where...", closed by "...is the part most frameworks don't account for", "...is something most people don't measure", "...is where most of my job happens". Say the point plainly instead. Rewrite these exactly like the GOOD versions:

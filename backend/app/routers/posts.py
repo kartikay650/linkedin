@@ -10,7 +10,7 @@ from app.db import get_db
 from app.llm.draft import generate_drafts, refine_draft, strip_unverifiable
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, verify_claims
 from app.models import Client, ClientDocument, Draft, Post
-from app.profiles import excluded_author_slugs
+from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
 from app.scraper.apify_client import account_usage
 from app.schemas import DraftOut, DraftUpdate, PostWithDrafts, RefineDraftRequest
 
@@ -137,7 +137,7 @@ def _visible_conditions(db: Session, client_id: int, max_age_days: int):
     client feeds for that post.
 
     Shared by the feed query and the count/summary aggregates so all three agree by construction.
-    The author exclusion mirrors profiles.profile_slug(): pull '/in/<slug>' out of the URL in SQL."""
+    The author exclusion mirrors profiles.is_own_or_colleague_post(): handle or member ID, in SQL."""
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=max_age_days)
     dt = func.coalesce(Post.posted_at, Post.fetched_at)
     conds = [
@@ -154,14 +154,22 @@ def _visible_conditions(db: Session, client_id: int, max_age_days: int):
         _within_feed_quota(),
     ]
     client = db.get(Client, client_id)
-    excluded = excluded_author_slugs(db, client) if client else set()
-    if excluded:
-        slug = func.coalesce(
-            func.substring(func.lower(func.coalesce(Post.author_profile_url, "")), r"/in/([^/?#]+)"),
-            func.substring(func.lower(func.coalesce(Post.source_ref, "")), r"/in/([^/?#]+)"),
-            "",
-        )
-        conds.append(~slug.in_(list(excluded)))
+    handles, ids = own_identities(db, client) if client else (set(), set())
+    # Author handle, source handle and author member ID are each checked on their own. The old
+    # coalesce(author, source) only looked at the source when the author had no handle, and
+    # matched handles only, so a client who changed handle saw their own posts. Every term is
+    # coalesced to '' because NOT (NULL IN (...)) is NULL, which would silently hide the row.
+    own = []
+    if handles:
+        for col in (Post.author_profile_url, Post.source_ref):
+            h = func.coalesce(func.substring(func.lower(func.coalesce(col, "")), r"/in/([^/?#]+)"), "")
+            own.append(h.in_(list(handles)))
+    if ids:
+        mid = func.coalesce(func.substring(func.coalesce(Post.author_profile_url, ""),
+                                           MEMBER_ID_SQL_PATTERN), "")
+        own.append(mid.in_(list(ids)))
+    if own:
+        conds.append(~or_(*own))
     return conds
 
 

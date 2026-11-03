@@ -52,6 +52,9 @@ class Client(Base):
     name = Column(String, nullable=False)
     specialty = Column(String, nullable=False)
     linkedin_url = Column(String, nullable=True)  # the client's own profile, not a watch-creator
+    # LinkedIn member ID (the fsd_profile URN), which survives a handle change. See
+    # profiles.own_identities. Learned from the client's own posts; null until one is seen.
+    linkedin_member_id = Column(String, nullable=True)
     company = Column(String, default="")  # groups colleagues; a client never sees own/same-company posts
     # Hidden from the dashboard sidebar without deleting anything. There was no way to stand a
     # client down: the foreign keys from posts, client_documents, watch_creators and prospects are

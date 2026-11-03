@@ -155,16 +155,41 @@ def _benchmark_block(client: Client) -> str:
     )
 
 
+# A note this long is a pasted prompt or a post summary, not a correction. Real corrections in the
+# history are one or two lines ("I always see 'in the kids I treat' in most of the comments").
+_FEEDBACK_NOTE_MAX = 400
+
+
 def _feedback_block(client: Client) -> str:
-    """Most recent operator corrections, auto-applied to every new draft."""
+    """Recent corrections a reviewer gave for this client.
+
+    This block once carried 92 copies of one pasted ChatGPT prompt — "Write a 3-sentence comment
+    ... Sentence 1: a strong reaction ... Sentence 2: explain ... Sentence 3: a supportive closing"
+    — for four clients, under the heading "apply every one". It filled all five slots, pushed the
+    one real correction out of the window, and was the literal source of the reaction ->
+    explanation -> closing shape reviewers kept rejecting. So: dedupe, cap each note, and frame
+    the notes as corrections that apply where relevant, never as a template that sets length or
+    structure. The rows themselves were removed on 3 Nov 2026 (backup kept)."""
     notes = getattr(client, "feedback", None) or []
-    recent = sorted(notes, key=lambda f: f.id, reverse=True)[:5]
-    lines = "\n".join(f"- {n.note.strip()}" for n in recent if (n.note or "").strip())
+    seen, lines = set(), []
+    for n in sorted(notes, key=lambda f: f.id, reverse=True):
+        text = " ".join((n.note or "").split())
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        if len(text) > _FEEDBACK_NOTE_MAX:
+            text = text[:_FEEDBACK_NOTE_MAX].rsplit(" ", 1)[0] + " ..."
+        lines.append(f"- {text}")
+        if len(lines) == 5:
+            break
     if not lines:
         return ""
     return (
-        "=== OPERATOR GUIDANCE (recent corrections — apply every one) ===\n"
-        + lines
+        "=== CORRECTIONS A REVIEWER GAVE FOR THIS CLIENT ===\n"
+        "Apply each one only where it is relevant to this post. They say what to avoid or fix; none "
+        "of them is a template, and none sets a length or a sentence structure.\n"
+        + "\n".join(lines)
         + "\n=== END ==="
     )
 
@@ -526,7 +551,7 @@ Author: {author}
 def _participant_note(client: Client, post: Post) -> str:
     """Warn the drafter when the CLIENT is named in the post they are replying to.
 
-    excluded_author_slugs() already stops a client commenting on their own posts, but nothing
+    own_identities() already stops a client commenting on their own posts, but nothing
     covered the case where somebody else's post is ABOUT them. Live example: Deepti Agarwal
     announced a session with "Dr. Joseph Raffaele, MD, who is five years into using this in real
     patients", and we generated Raffaele himself asking outsiders how to interpret GlycanAge —
@@ -766,6 +791,13 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
     # Option 1 is free; option 2+ must take a clearly different opening/angle (still on the approach).
     n = max(1, count)
     shapes = [""] + ["Take a clearly different opening and angle from the other option(s), still following the approach above."] * (n - 1)
+
+    # Resolve lazy relationships HERE, on the calling thread, before the pool starts. The workers
+    # build _feedback_block(client), which reads client.feedback — a lazy relationship — and a
+    # SQLAlchemy session is not thread-safe, so two workers could both trigger that load on the
+    # same session at once. Done inside generate_drafts so every caller is covered, not just the
+    # draft route (which only force-loads what its own safety pass reads).
+    _ = list(getattr(client, "feedback", None) or [])
 
     def one(sh: str) -> str:
         return _reason_candidate(client, post, brief, plan, gate_avoid, voice_ex_block, memory_block, sh)

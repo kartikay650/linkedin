@@ -105,6 +105,17 @@ export default function ProspectsPanel() {
   };
 
   const setKindOf = async (c, k) => {
+    // Moving someone to prospects is not a label: prospects are never fetched, so it stops their
+    // posts reaching every client they're assigned to. Done silently, that froze Alex
+    // Zhavoronkov (a priority account for Dr. Joe) for a month. Say what it does before doing it.
+    if (k === "prospect") {
+      const who = c.name || c.profile_url;
+      const n = (c.client_ids || []).length;
+      const msg = n
+        ? `Stop fetching ${who}? Their new posts will stop reaching ${n} client${n === 1 ? "" : "s"}. Posts already in the queue stay.`
+        : `Move ${who} to prospects? Prospects aren't fetched.`;
+      if (!window.confirm(msg)) return;
+    }
     try { await api.updateCreator(c.id, { kind: k }); load(); }
     catch (err) { toast(`Couldn't update: ${err.message}`); }
   };
@@ -260,7 +271,7 @@ export default function ProspectsPanel() {
             subtitle="Assign each creator to the clients who should see their posts (only assigned clients get them). Set how often they post — frequent posters are fetched often, rare ones seldom, to keep scraping cost down."
             rows={tracked}
             promoteTo="prospect"
-            promoteLabel="Move to prospects"
+            promoteLabel="Move to prospects (stops fetching)"
             assignable
           />
           <Section

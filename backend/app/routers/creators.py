@@ -3,6 +3,7 @@ profiles are tracked and commented on; kind='prospect' are lead-gen targets
 surfaced in the Prospects tab. The operator can add their own or promote a
 prospect to a tracked creator — we deliberately do NOT auto-discover new profiles.
 """
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,8 +32,19 @@ def add_creator(payload: CreatorCreate, db: Session = Depends(get_db)):
     if "linkedin.com/in/" not in url.lower():
         raise HTTPException(400, "That doesn't look like a LinkedIn profile. The link should contain 'linkedin.com/in/…' (a personal profile, not a company page or a search link).")
     url = url.split("?")[0].rstrip("/") + "/"  # normalise for dedup
+    # One canonical host. Country subdomains (hr.linkedin.com, uk.linkedin.com) point at the same
+    # profile, and not normalising them is how Gordan Lauc ended up with two creator rows.
+    url = re.sub(r"^https?://[a-z]{2,3}\.linkedin\.com/", "https://www.linkedin.com/", url, flags=re.I)
     existing = db.query(Creator).filter(Creator.profile_url == url).first()
     if existing:
+        # Adding someone who already exists as a prospect, to track them, must start fetching
+        # them. This used to return the prospect row untouched: the client modal assigned it and
+        # said "Now tracking X", but prospects are never fetched, so nothing ever arrived.
+        # Promote only, never demote — demoting would stop fetching for every client at once.
+        if payload.kind == "creator" and existing.kind == "prospect":
+            existing.kind = "creator"
+            db.commit()
+            db.refresh(existing)
         return existing
     freq = payload.post_frequency if payload.post_frequency in ("yes", "sometimes", "no") else "sometimes"
     creator = Creator(

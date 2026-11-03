@@ -21,7 +21,7 @@ from app.config import settings
 from app.llm.relevance import score_post
 from app.models import Client, Creator, CreatorClient, Post, WatchCreator
 from app.lang import detect_language
-from app.profiles import is_own_or_colleague_post, profile_slug
+from app.profiles import is_own_or_colleague_post, profile_slug, remember_member_id
 from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
 
 # Recent posts to pull per source. Watch-creators (hand-picked, high-priority) get
@@ -264,6 +264,9 @@ def _is_priority_creator(db: Session, client_id: int, source_ref: str) -> bool:
 def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -> None:
     # Never surface a client's own posts, or a same-company colleague's, in their feed.
     if is_own_or_colleague_post(db, client, raw.get("author_profile_url", ""), source_ref):
+        # Still dropped from the feed, but first note the member ID, so a future handle change
+        # is recognised. This is the only place a client's own post is seen.
+        remember_member_id(db, client, raw.get("author_profile_url", ""))
         return
     post = Post(
         client_id=client.id,
