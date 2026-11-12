@@ -98,7 +98,7 @@ Current reply:
 
 The reviewer's request for this comment: {instruction}
 
-Respond ONLY with JSON: {{"draft": "...", "not_done": ""}}"""
+{check}Respond ONLY with JSON: {{"draft": "...", "not_done": ""}}"""
 
 
 STRIP_NEGATION_PROMPT = """The comment below uses NEGATION AS A DEVICE — defining something by what it is \
@@ -1082,26 +1082,35 @@ def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]
 
 
 def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
-                 memory_block: str, voice_ex_block: str = "", keep: str = "") -> tuple[str, str]:
+                 memory_block: str, voice_ex_block: str = "", check: str = "") -> tuple[str, str]:
     """One Tweak call. Returns (text, not_done): not_done is the model's own sentence to the
-    reviewer about any part of the request a hard rule stopped, or that was already done. `keep`
-    is her request as she gave it (without the gate's "Also fix" retry text), passed to the
-    humanizer so it removes the AI tells without reverting the change."""
+    reviewer about any part of the request a hard rule stopped, or that was already done.
+
+    `check` is the gate's findings on a first attempt, retry only. It goes on its own labelled
+    line rather than onto her request: appended to the request, the model read the gate's "fix
+    the length" as something she had asked for, and the humanizer was told to protect it."""
     rest = REFINE_PROMPT.format(
         name=client.name, voice=_voice_block(client), viewpoints=_viewpoints_block(client),
         benchmark=_benchmark_block(client), voice_examples=voice_ex_block,
         feedback=_feedback_block(client), memory=memory_block,
-        content=post.content_snippet, current=current_text, instruction=instruction)
+        content=post.content_snippet, current=current_text, instruction=instruction,
+        check=(f"An automatic check of your first attempt found these. They are not part of the "
+               f"reviewer's request; fix them while still doing what the reviewer asked: {check}\n\n"
+               if check else ""))
     content = _blocks((HOUSE_STYLE, True), (rest, False))  # cache HOUSE_STYLE across tweaks
     try:
         # effort="low": a tweak has to re-read the post and respect the hard rules, same as a
         # first draft — this path is where guardrails have historically been bypassed.
         data = extract_json(_call(settings.draft_model, content, 800, 50.0, effort="low"))
-        revised = str(data["draft"])
+        # Valid JSON that is not an object (a list, a string) raises TypeError on the lookup; a
+        # null draft would otherwise be saved as the word "None". Both are a failed call (502).
+        revised = str(data["draft"] or "").strip()
         not_done = " ".join(str(data.get("not_done") or "").split())[:300]
-    except (ValueError, KeyError, AttributeError):
+    except (ValueError, KeyError, AttributeError, TypeError):
         return "", ""
-    out = humanize_comments([revised], _voice_block(client), keep=keep or instruction)
+    if not revised:
+        return "", ""
+    out = humanize_comments([revised], _voice_block(client), keep=instruction)
     return _strip_negation(out[0] if out else revised), not_done
 
 
@@ -1167,9 +1176,21 @@ def tweak_noop_note(chip: str | None, instruction: str, current: str, not_done: 
 
 
 def same_words(a: str, b: str) -> bool:
-    """Same words in the same order, ignoring case and punctuation. A Tweak whose only change is an
-    em dash turned into a comma is still the same comment to the reviewer."""
+    """Same words in the same order, ignoring case and punctuation."""
     return _norm_words(a) == _norm_words(b)
+
+
+def tweak_unchanged(revised: str, current: str) -> bool:
+    """Did a Tweak change nothing the reviewer would count as a change?
+
+    Same words is not enough on its own. A "No question" that turns "?" into "." has done exactly
+    what was asked, and so has a rewrite whose only change is taking out a banned em dash,
+    exclamation point or emoji; throwing those away kept the question or the banned mark on the
+    card and told her nothing changed. Any other punctuation or case change (a comma moved, a
+    capital) is still the same comment to her."""
+    return (same_words(revised, current)
+            and _is_question(revised) == _is_question(current)
+            and not (_violation_kinds(current) - _violation_kinds(revised)))
 
 
 _PICK_PROMPT = """A reviewer wants this LinkedIn comment, written as {name}, made shorter. Here it is, one
@@ -1213,6 +1234,26 @@ def shorten_draft(client: Client, post: Post, current_text: str, **context) -> t
     return refine_draft(client, post, current_text, TWEAK_CHIPS["shorter"], **context)
 
 
+# Gate checks that can contradict an explicit Tweak request, and what the card says when the retry
+# enforced one. The others (banned wording, a repeated opening) are either hard rules the model
+# reports itself in not_done or nothing a reviewer would ask for, so they get no note.
+_GATE_NOTES = {
+    "rambling": "Kept it under 60 words, the house limit for a comment.",
+    "over-certainty": 'Softened the certainty (words like "definitely" or "proves"): the house style '
+                      "keeps science claims nuanced.",
+    "conditional advice": 'Left out "I would..." advice to the author: the house style doesn\'t allow it.',
+    "hedge tic": 'Reworded "tends to" / "seems to": the house style treats it as a verbal tic.',
+}
+
+
+def _gate_note(first_probs: list[str], final: str, gate_avoid: list[str], allow: bool) -> str:
+    """Plain sentences for the gate checks the first attempt failed and the accepted retry fixed."""
+    def kinds(probs: list[str]) -> set[str]:
+        return {re.split(r" \(| —", p, maxsplit=1)[0] for p in probs}
+    fixed = kinds(first_probs) - kinds(_hard_problems(final, gate_avoid, allow))
+    return " ".join(note for kind, note in _GATE_NOTES.items() if kind in fixed)
+
+
 def _wants_no_question(instruction: str) -> bool:
     """Did the operator ask for a statement rather than a question?
 
@@ -1236,7 +1277,9 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
 
     Returns (text, not_done). Empty text means the call failed. Text equal to `current_text` means
     nothing changed, and the route tells the reviewer so. Every pass after the model (humanizer,
-    repair, fact-check rewrite) is handed the request, so none of them reverts it."""
+    repair, fact-check rewrite) is handed the request so it does not undo it. Two things can still
+    overrule it, and both are reported in not_done rather than dropped silently: a hard rule (the
+    model's own sentence, or the route's fact-check note) and the gate's retry (_gate_note)."""
     base_avoid = list(avoid_texts or [])
     profile = output_profile(base_avoid + list(global_texts or []))
     memory_block = "\n\n".join(
@@ -1268,17 +1311,19 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     # style ("LENGTH: your judgement, taken from the post"). Genuine rambling is already a
     # violation inside _hard_problems at 60 words, which is where a length rule belongs.
     if probs or unmet:
-        fix = ("Also strictly fix these: " + "; ".join(probs) + ". ") if probs else ""
+        fix = ("; ".join(probs) + ". ") if probs else ""
         if unmet:
             fix += ("It must NOT be a question. Rewrite it as a plain statement that makes the same "
                     "point, and do not end with a question mark. ")
-        retry, retry_not_done = _refine_once(client, post, current_text, (instruction + " " + fix).strip(),
-                                             memory_block, voice_ex_block, keep=instruction)
+        retry, retry_not_done = _refine_once(client, post, current_text, instruction,
+                                             memory_block, voice_ex_block, check=fix.strip())
         if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
             # Never accept a retry that still asks when the operator asked it not to.
             if not (_wants_no_question(instruction) and _is_question(retry)):
                 text = _fuse(client, retry, instruction) if has_stacked_statements(retry) else retry
-                not_done = retry_not_done
+                # The gate can overrule her ("expand on this" vs the 60-word limit, "firmer" vs
+                # the over-certainty check). Say what it enforced instead of dropping it silently.
+                not_done = " ".join(x for x in (retry_not_done, _gate_note(probs, text, gate_avoid, allow)) if x)
     if _wants_no_question(instruction) and _is_question(text):
         # Both attempts still asked. This used to return the question anyway, so "No question"
         # visibly did nothing. The dedicated converter is the one first drafts use when every

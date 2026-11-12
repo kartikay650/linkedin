@@ -80,8 +80,12 @@ export default function PostCard({ post, onActioned }) {
       const shown = editedText[draft.id] ?? draft.edited_text ?? draft.text;
       const saved = serverText[draft.id] ?? draft.edited_text ?? draft.text;
       if (shown !== saved) {
-        await api.updateDraft(draft.id, { edited_text: shown });
+        const u = await api.updateDraft(draft.id, { edited_text: shown });
         setServerText((prev) => ({ ...prev, [draft.id]: shown }));
+        // Same as Save edit: if the Tweak below then fails, the card must still say the saved edit
+        // has outrun its fact-check, not show the old check as if it covered the new text.
+        setStaleByDraft((prev) => ({ ...prev, [draft.id]: !!u?.provenance_stale }));
+        setCheckFailed((prev) => ({ ...prev, [draft.id]: !!u?.check_failed }));
       }
       const updated = how.chip === "angle"
         ? await api.angleDraft(draft.id)

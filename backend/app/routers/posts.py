@@ -11,7 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
 from app.llm.draft import (TWEAK_CHIPS, _sentences, angle_draft, generate_drafts, refine_draft, same_words,
-                           shorten_draft, strip_unverifiable, tweak_noop_note)
+                           shorten_draft, strip_unverifiable, tweak_noop_note, tweak_unchanged)
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, check_failed, verify_claims
 from app.llm.style import check_violations
 from app.models import Client, ClientDocument, Draft, Post, TweakEvent, text_hash
@@ -620,7 +620,7 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
         # The model call failed. This used to hand back her own text as if it were the tweak,
         # then run it through the fact-check rewrite and log a tweak that never happened.
         raise HTTPException(502, "couldn't rewrite that one — try again")
-    if same_words(revised, current) or (
+    if tweak_unchanged(revised, current) or (
             chip == "shorter" and len(revised.split()) >= len(current.split())):
         # Nothing changed. This used to return the draft silently, so the card showed the same
         # comment as if the button had worked: "Remove opinion" pressed three times, the same
