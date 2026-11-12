@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.jobs.discovery import start_discovery_for_client
-from app.models import Client
+from app.models import Client, client_active
 
 router = APIRouter(tags=["cron"])
 
@@ -32,7 +32,8 @@ def cron_sync_all(authorization: str = Header(default=""), db: Session = Depends
     # a manual sync (a queue is the unbounded-scale follow-up).
     start = time.monotonic()
     clients_synced = runs_started = 0
-    for client in db.query(Client).order_by(Client.id).all():
+    # Archived clients are skipped: nothing is fetched for them, and they don't use up the budget.
+    for client in db.query(Client).filter(client_active(Client.id)).order_by(Client.id).all():
         if time.monotonic() - start > 20.0:
             break
         try:

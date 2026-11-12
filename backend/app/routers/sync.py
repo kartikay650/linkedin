@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.jobs.discovery import backfill_client, fire_profiles, plan_profiles
-from app.models import Client
+from app.models import Client, client_active
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
@@ -49,7 +49,9 @@ def sync_backfill(payload: SyncPlanRequest, db: Session = Depends(get_db)):
     """One-time/maintenance: give a client (or every client) the recent posts we already
     have for their assigned profiles — no re-scrape. Fixes clients assigned to creators
     that were fetched before the assignment. Time-bounded; idempotent (re-runnable)."""
-    clients = [db.get(Client, payload.client_id)] if payload.client_id else db.query(Client).all()
+    # Archived clients get nothing (backfill_client_creator refuses them too, for the client_id case).
+    clients = ([db.get(Client, payload.client_id)] if payload.client_id
+               else db.query(Client).filter(client_active(Client.id)).all())
     total_added = 0
     for client in clients:
         if not client:
