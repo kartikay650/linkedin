@@ -67,8 +67,10 @@ From the 9-post before/after benchmark (3 Nov 2026), things that improved but ar
   needs its WADA status..."). HOUSE_STYLE bans them; nothing detects them.
 - **Dr. Joe's options read abstract** ("Named levers and measurable readouts give partners a
   rigorous way..."). Self-insertion is gone; warmth didn't replace it.
-- `tweak_events` now logs every chip press with the text moved away from: read it after a week to
-  see which chips reviewers actually use.
+- `tweak_events` now logs every chip press that changed the comment, with the text moved away
+  from: read it after a week to see which chips reviewers actually use. A press that changed
+  nothing (the card says so) is NOT logged, so repeated "Remove opinion" presses won't show up
+  there. Whether to log those too is an open question for the owner.
 
 ## Housekeeping
 

@@ -203,6 +203,10 @@ class DraftOut(BaseModel):
     source: str = "generated"
     provenance_stale: bool = False
     check_failed: bool = False
+    # Set only on a Tweak or Different angle response, never stored: what the reviewer should know
+    # about that press (nothing changed, part of the request was blocked by a hard rule, or the
+    # fact-check took a claim out).
+    tweak_note: Optional[str] = None
 
     class Config:
         from_attributes = True

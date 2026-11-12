@@ -70,7 +70,7 @@ Match this person's voice:
 {voice}
 \"\"\"
 
-Drafts:
+{keep}Drafts:
 {drafts}
 
 Respond ONLY with JSON: {{"drafts": ["rewritten one", "rewritten two", ...]}} in the same order and count."""
@@ -80,12 +80,28 @@ Respond ONLY with JSON: {{"drafts": ["rewritten one", "rewritten two", ...]}} in
 _HUMANIZE_SPLIT = "Match this person's voice:"
 
 
-def humanize_comments(texts: list[str], voice_guide: str) -> list[str]:
+def keep_note(keep: str, what: str) -> str:
+    """One line telling a pass that runs after the Tweak model what the reviewer asked for, so it
+    does not undo it. Only the Tweak path passes `keep`; with it empty this returns "" and every
+    first-draft prompt is byte-identical to before."""
+    keep = " ".join((keep or "").split())
+    if not keep:
+        return ""
+    return (f'A reviewer asked for this change, and {what} already makes it: "{keep[:500]}". '
+            "Do not undo it or cut what it added.\n\n")
+
+
+def humanize_comments(texts: list[str], voice_guide: str, keep: str = "") -> list[str]:
+    """`keep` is a reviewer's Tweak request, passed only on the Tweak path. This pass never saw
+    the request, so it could read a sentence she had just asked for as a repeat and delete it, or
+    smooth a firmer line she asked for back down. With `keep` empty the prompt is byte-identical to
+    a first draft's."""
     texts = [t for t in texts if t and t.strip()]
     if not texts:
         return texts
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
-    full = PROMPT.format(voice=(voice_guide or "").strip() or "Direct, plain, no fluff.", drafts=numbered)
+    full = PROMPT.format(voice=(voice_guide or "").strip() or "Direct, plain, no fluff.", drafts=numbered,
+                         keep=keep_note(keep, "the draft"))
     idx = full.find(_HUMANIZE_SPLIT)
     static, variable = full[:idx].rstrip(), full[idx:]
     content = [

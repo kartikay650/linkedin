@@ -51,6 +51,9 @@ export default function PostCard({ post, onActioned }) {
   const [fullPost, setFullPost] = useState(null);
   const [showFull, setShowFull] = useState(false);
   const [loadingFull, setLoadingFull] = useState(false);
+  // What the server said about the last Tweak on a card: nothing changed, part of the request was
+  // blocked by a hard rule, or the fact-check took a claim out. Cleared by the next Tweak or edit.
+  const [tweakNote, setTweakNote] = useState({});
 
   // Drafts still being worked: generated (pending), moved to draft, or approved — not posted/rejected.
   const workingDrafts = post.drafts.filter((d) => ["pending", "drafted", "approved"].includes(d.status));
@@ -75,13 +78,31 @@ export default function PostCard({ post, onActioned }) {
   const handleRefine = async (draft, how) => {
     if (!how.chip && !(how.instruction || "").trim()) return;
     setRefining(draft.id);
+    setTweakNote((prev) => ({ ...prev, [draft.id]: null }));
     try {
+      // The server tweaks what it has stored. An unsaved edit in the box used to be ignored by the
+      // Tweak and then overwritten by its result, so save it first and tweak that.
+      const shown = editedText[draft.id] ?? draft.edited_text ?? draft.text;
+      const saved = serverText[draft.id] ?? draft.edited_text ?? draft.text;
+      if (shown !== saved) {
+        const u = await api.updateDraft(draft.id, { edited_text: shown });
+        setServerText((prev) => ({ ...prev, [draft.id]: shown }));
+        // Same as Save edit: if the Tweak below then fails, the card must still say the saved edit
+        // has outrun its fact-check, not show the old check as if it covered the new text.
+        setStaleByDraft((prev) => ({ ...prev, [draft.id]: !!u?.provenance_stale }));
+        setCheckFailed((prev) => ({ ...prev, [draft.id]: !!u?.check_failed }));
+      }
       const updated = how.chip === "angle"
         ? await api.angleDraft(draft.id)
         : await api.refineDraft(draft.id, how.chip ? { chip: how.chip } : { instruction: how.instruction.trim() });
-      setEditedText((prev) => ({ ...prev, [draft.id]: updated.text }));
-      setServerText((prev) => ({ ...prev, [draft.id]: updated.edited_text ?? updated.text }));
-      if (!how.chip) setTweak((prev) => ({ ...prev, [draft.id]: "" }));
+      // edited_text first: when nothing changed the server returns the draft as stored, and a
+      // saved edit must stay in the box rather than the generated text under it.
+      const now = updated.edited_text ?? updated.text;
+      setEditedText((prev) => ({ ...prev, [draft.id]: now }));
+      setServerText((prev) => ({ ...prev, [draft.id]: now }));
+      setTweakNote((prev) => ({ ...prev, [draft.id]: updated.tweak_note || null }));
+      // Keep her request in the box when nothing changed, so she can reword it instead of retyping.
+      if (!how.chip && now !== shown) setTweak((prev) => ({ ...prev, [draft.id]: "" }));
       // Refresh the citation for the rewritten text. Web-checking is manual now
       // (the "Check sources" button) so drafting/tweaking never fires a paid search.
       setProvByDraft((prev) => ({ ...prev, [draft.id]: updated.provenance || [] }));
@@ -509,7 +530,10 @@ export default function PostCard({ post, onActioned }) {
               }}
               value={shown}
               disabled={refining === draft.id}
-              onChange={(e) => setEditedText((prev) => ({ ...prev, [draft.id]: e.target.value }))}
+              onChange={(e) => {
+                setEditedText((prev) => ({ ...prev, [draft.id]: e.target.value }));
+                setTweakNote((prev) => ({ ...prev, [draft.id]: null }));
+              }}
             />
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
               {dirty
@@ -537,7 +561,7 @@ export default function PostCard({ post, onActioned }) {
                 </button>
               ))}
               <input
-                placeholder="or tell it how to change…"
+                placeholder="or tell it what to change: the angle, the position, what to drop…"
                 value={tweak[draft.id] || ""}
                 disabled={refining === draft.id}
                 onChange={(e) => setTweak((p) => ({ ...p, [draft.id]: e.target.value }))}
@@ -556,6 +580,17 @@ export default function PostCard({ post, onActioned }) {
                 {refining === draft.id ? "Tweaking…" : "Tweak"}
               </button>
             </div>
+            )}
+            {!manual && tweakNote[draft.id] && (
+              <div
+                role="status"
+                style={{
+                  marginTop: 6, padding: "6px 10px", borderRadius: 6, fontSize: 12, lineHeight: 1.5,
+                  background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-muted)",
+                }}
+              >
+                {tweakNote[draft.id]}
+              </div>
             )}
 
 
