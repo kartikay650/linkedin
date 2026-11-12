@@ -99,7 +99,13 @@ def client_active(client_id_col):
     for him, posts relevance-scored for him (a paid call each), and his rows kept taking slots under
     the two-feeds-per-post cap away from clients still being served. Use this in every query that
     decides who is fetched for, fanned out to, scored, counted or shown alongside other clients,
-    so the next such query has one thing to remember. Nothing is deleted: unarchiving restores it.
+    so the next such query has one thing to remember.
+
+    So archiving is the flag alone: don't also remove the client's creator assignments or dismiss
+    their posts, because then unarchiving cannot bring them back. Flipping the flag back restores
+    only what is still in place. Marwan and Mazen are the exception: when they were archived
+    (7deb39a), their creator assignments were removed and their live posts dismissed by hand. If
+    either returns, reassign their creators, then run POST /sync/backfill with their client_id.
 
     Works on any client id column, Client.id included. NOT IN over the primary key (never NULL)
     plans as a hashed subplan: clients is read once per statement and each row is one hash probe,

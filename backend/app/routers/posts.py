@@ -105,8 +105,13 @@ def _within_feed_quota():
     Marwan Karnaby's rows kept taking slots after he was archived (9 from Noah and Silvana in 14
     days) for comments nobody would ever post. A comment he DID post is still under that post on
     LinkedIn, though, and the cap exists so the audience doesn't see our whole roster in one
-    thread, so that row keeps its place. The archived check is a hash probe (see client_active);
-    the posted check only runs for archived rows, and drafts(post_id) is indexed."""
+    thread, so that row keeps its place. It keeps only a place it already ranks for: like any
+    client's posted row, one ranked 3rd never displaces anyone, so three of our comments can
+    still sit under one post. Whether posted work should always take a slot is a team decision
+    for every client, not one to settle here.
+
+    The archived check is a hash probe (see client_active); the posted check only runs for archived
+    rows, and drafts(post_id) is indexed."""
     other = aliased(Post)
     mine = func.coalesce(Post.relevance_score, -1.0)
     theirs = func.coalesce(other.relevance_score, -1.0)

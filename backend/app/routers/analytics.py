@@ -13,7 +13,8 @@ router = APIRouter(tags=["analytics"])
 @router.get("/analytics")
 def analytics(db: Session = Depends(get_db)):
     # Clients being served now. An archived client is left out of every number here, as on the
-    # sidebar; their rows are untouched, so unarchiving brings them back.
+    # sidebar. Nothing here changes their rows, so unarchiving brings back whatever wasn't removed
+    # or dismissed at archive time (see client_active).
     live = client_active(Post.client_id)
     drafts = db.query(Draft).join(Post, Draft.post_id == Post.id).filter(live)
     totals = {
