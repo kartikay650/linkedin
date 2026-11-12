@@ -14,7 +14,7 @@ from app.llm.draft import (TWEAK_CHIPS, _sentences, angle_draft, generate_drafts
                            shorten_draft, strip_unverifiable)
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, check_failed, verify_claims
 from app.llm.style import check_violations
-from app.models import Client, ClientDocument, Draft, Post, TweakEvent, text_hash
+from app.models import Client, ClientDocument, Draft, Post, TweakEvent, client_active, text_hash
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
 from app.scraper.apify_client import account_usage
 from app.schemas import DraftOut, DraftUpdate, ManualDraftRequest, PostWithDrafts, RefineDraftRequest
@@ -99,7 +99,14 @@ def _within_feed_quota():
     as a plain SQL condition and composes into _visible_conditions with everything else. Ties break
     on client_id so the ordering is deterministic and a feed cannot flicker between loads.
     Costs ~22ms across the whole table given the posts(post_url) index; without that index it was
-    568ms, which is why the migration alongside this adds it."""
+    568ms, which is why the migration alongside this adds it.
+
+    An archived client's row never counts as ahead, unless a comment was actually posted from it.
+    Marwan Karnaby's rows kept taking slots after he was archived (9 from Noah and Silvana in 14
+    days) for comments nobody would ever post. A comment he DID post is still under that post on
+    LinkedIn, though, and the cap exists so the audience doesn't see our whole roster in one
+    thread, so that row keeps its place. The archived check is a hash probe (see client_active);
+    the posted check only runs for archived rows, and drafts(post_id) is indexed."""
     other = aliased(Post)
     mine = func.coalesce(Post.relevance_score, -1.0)
     theirs = func.coalesce(other.relevance_score, -1.0)
@@ -113,6 +120,8 @@ def _within_feed_quota():
             other.post_url == Post.post_url,
             other.dismissed.is_(False),
             other.client_id != Post.client_id,
+            or_(client_active(other.client_id),
+                exists().where(Draft.post_id == other.id, Draft.status == "posted")),
             or_(
                 and_(other.is_priority.is_(True), Post.is_priority.is_(False)),
                 and_(other.is_priority == Post.is_priority, theirs > mine),
@@ -299,7 +308,7 @@ def notifications_summary(
     STAGE = {"to_post": ("approved", "approved"), "to_approve": ("draft", "drafted")}
     result = {k: {"total": 0, "oldest_hours": None, "by_client": []} for k in STAGE}
 
-    for client in db.query(Client).order_by(Client.name).all():
+    for client in db.query(Client).filter(client_active(Client.id)).order_by(Client.name).all():
         conds = _visible_conditions(db, client.id, max_age_days)
         for key, (view, status) in STAGE.items():
             # Two scalar aggregates. Deliberately NOT one joined query: the view predicates are

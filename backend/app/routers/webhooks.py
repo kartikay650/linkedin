@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.jobs.discovery import _save_and_process
-from app.models import Client, Creator, CreatorClient, WatchCreator
+from app.models import Client, Creator, CreatorClient, WatchCreator, client_active
 from app.scraper.apify_client import _normalise, dataset_items
 
 router = APIRouter(tags=["webhooks"])
@@ -20,7 +20,7 @@ router = APIRouter(tags=["webhooks"])
 
 def _clients_tracking(db: Session, url: str) -> list[Client]:
     """Every client that tracks this profile URL — as an assigned tracked creator OR
-    as a hand-picked watch-creator. Deduped."""
+    as a hand-picked watch-creator. Deduped. Archived clients are not tracking anything."""
     ids = set()
     rows = (
         db.query(CreatorClient.client_id)
@@ -32,7 +32,7 @@ def _clients_tracking(db: Session, url: str) -> list[Client]:
     ids.update(r[0] for r in db.query(WatchCreator.client_id).filter(WatchCreator.profile_url == url).all())
     if not ids:
         return []
-    return db.query(Client).filter(Client.id.in_(ids)).all()
+    return db.query(Client).filter(Client.id.in_(ids), client_active(Client.id)).all()
 
 
 @router.post("/apify/webhook")
@@ -56,7 +56,7 @@ async def apify_webhook(request: Request, secret: str = "", db: Session = Depend
         # Fallback for any in-flight run fired before the fan-out change (carried a client_id).
         cid = body.get("client_id")
         c = db.get(Client, cid) if cid else None
-        clients = [c] if c else []
+        clients = [c] if c and not c.archived else []
     if not clients:
         return {"ok": False, "reason": f"no client tracks {source_ref}"}
 

@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.llm.relevance import score_post
-from app.models import Client, Creator, CreatorClient, Post, WatchCreator
+from app.models import Client, Creator, CreatorClient, Post, WatchCreator, client_active
 from app.lang import detect_language
 from app.profiles import is_own_or_colleague_post, profile_slug, remember_member_id
 from app.scraper.apify_client import ApifyError, _build_input, fetch_posts as apify_fetch_posts, start_actor
@@ -79,7 +79,12 @@ def plan_profiles(db: Session, client: Client | None = None, force: bool = False
 
     force=True ignores the cadence gate and includes EVERY assigned profile — the
     on-demand 'fetch latest now' for when someone knows a creator just posted and the
-    normal (cadence-respecting) sync said nothing was due. Costs more, so it's explicit."""
+    normal (cadence-respecting) sync said nothing was due. Costs more, so it's explicit.
+
+    Archived clients are left out everywhere: a profile tracked only by archived clients is not
+    fetched, and syncing an archived client fetches nothing."""
+    if client is not None and client.archived:
+        return []
     now = datetime.now(timezone.utc)
     profiles: dict[str, dict] = {}
 
@@ -94,7 +99,8 @@ def plan_profiles(db: Session, client: Client | None = None, force: bool = False
             cur["posts"] = max(cur["posts"], posts)
             cur["label"] = cur["label"] or (label or "")
 
-    watch = list(client.watch_creators) if client is not None else db.query(WatchCreator).all()
+    watch = (list(client.watch_creators) if client is not None
+             else db.query(WatchCreator).filter(client_active(WatchCreator.client_id)).all())
     for wc in watch:
         if force or _due_since(wc.last_fetched_at, now, _WATCH_CADENCE_DAYS):
             add(wc.profile_url, wc.label, _WATCH_POSTS)
@@ -106,6 +112,8 @@ def plan_profiles(db: Session, client: Client | None = None, force: bool = False
     )
     if client is not None:
         cq = cq.filter(CreatorClient.client_id == client.id)
+    else:
+        cq = cq.filter(client_active(CreatorClient.client_id))
     for c in cq.distinct().all():
         if force or _creator_due(c, now):
             add(c.profile_url, c.name, _GLOBAL_POSTS)
@@ -156,7 +164,10 @@ def fire_profiles(db: Session, profiles: list[dict], time_budget_s: float = _FIR
 def backfill_client_creator(db: Session, client: Client, source_ref: str, max_age_days: int = 14) -> int:
     """Give `client` the recent posts we ALREADY have for this profile URL (scraped for
     other clients), so a newly-assigned client isn't empty and we don't re-scrape. No
-    Apify cost — reuses stored posts; scores relevance for this client. Returns # added."""
+    Apify cost — reuses stored posts; scores relevance for this client. Returns # added.
+    An archived client gets nothing (each post would be a paid relevance call)."""
+    if client.archived:
+        return 0
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
     have = {
         r[0] for r in db.query(Post.post_url)
@@ -207,6 +218,8 @@ def backfill_client(db: Session, client: Client, time_budget_s: float = 40.0) ->
 def run_discovery_for_client(db: Session, client: Client) -> int:
     """Polling mode: fetch each watch-creator's posts now and save them.
     Returns the number of new posts. Used when apify_use_webhooks is off."""
+    if client.archived:
+        return 0
     before = db.query(Post).filter(Post.client_id == client.id).count()
     for creator in client.watch_creators:
         try:
@@ -262,6 +275,10 @@ def _is_priority_creator(db: Session, client_id: int, source_ref: str) -> bool:
 
 
 def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -> None:
+    # Every path that stores and scores a post comes through here, so this is the backstop: an
+    # archived client never gets a new post or a paid relevance call, whichever caller forgot.
+    if client.archived:
+        return
     # Never surface a client's own posts, or a same-company colleague's, in their feed.
     if is_own_or_colleague_post(db, client, raw.get("author_profile_url", ""), source_ref):
         # Still dropped from the feed, but first note the member ID, so a future handle change

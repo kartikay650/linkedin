@@ -1,7 +1,8 @@
 import enum
 
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, ForeignKey, DateTime, Enum, JSON, Float, UniqueConstraint
+    Column, Integer, String, Text, Boolean, ForeignKey, DateTime, Enum, JSON, Float, UniqueConstraint,
+    select,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -88,6 +89,25 @@ class Client(Base):
     prospects = relationship("Prospect", back_populates="client", cascade="all, delete-orphan")
     feedback = relationship("ClientFeedback", back_populates="client", cascade="all, delete-orphan")
     creator_links = relationship("CreatorClient", back_populates="client", cascade="all, delete-orphan")
+
+
+def client_active(client_id_col):
+    """SQL condition: the client this row belongs to is not archived.
+
+    Archiving only hid a client from the sidebar. Every other query still treated them as live, so
+    Marwan Karnaby, archived when the team stopped commenting for him, kept having profiles fetched
+    for him, posts relevance-scored for him (a paid call each), and his rows kept taking slots under
+    the two-feeds-per-post cap away from clients still being served. Use this in every query that
+    decides who is fetched for, fanned out to, scored, counted or shown alongside other clients,
+    so the next such query has one thing to remember. Nothing is deleted: unarchiving restores it.
+
+    Works on any client id column, Client.id included. NOT IN over the primary key (never NULL)
+    plans as a hashed subplan: clients is read once per statement and each row is one hash probe,
+    so it is cheap even inside the feed quota's per-row subquery. correlate(None) keeps the inner
+    SELECT self-contained when the outer query also reads clients."""
+    return client_id_col.not_in(
+        select(Client.id).where(Client.archived.is_(True)).correlate(None)
+    )
 
 
 class Creator(Base):
