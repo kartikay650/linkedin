@@ -46,6 +46,11 @@ export default function PostCard({ post, onActioned }) {
   // What the server holds for each card after a Tweak, angle or Save edit made here. Without it a
   // Tweak's result looked like an unsaved edit, because the draft prop is not refetched.
   const [serverText, setServerText] = useState({});
+  // "Show full post": the feed carries a preview only, so the full stored text is fetched once,
+  // on the first click, and kept for later toggles. { text, truncated } once loaded.
+  const [fullPost, setFullPost] = useState(null);
+  const [showFull, setShowFull] = useState(false);
+  const [loadingFull, setLoadingFull] = useState(false);
 
   // Drafts still being worked: generated (pending), moved to draft, or approved — not posted/rejected.
   const workingDrafts = post.drafts.filter((d) => ["pending", "drafted", "approved"].includes(d.status));
@@ -94,6 +99,20 @@ export default function PostCard({ post, onActioned }) {
     await navigator.clipboard.writeText(editedText[draft.id] ?? draft.edited_text ?? draft.text);
     setCopiedId(draft.id);
     setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const handleToggleFull = async () => {
+    if (showFull) return setShowFull(false);
+    if (fullPost) return setShowFull(true);
+    setLoadingFull(true);
+    try {
+      setFullPost(await api.postText(post.id));
+      setShowFull(true);
+    } catch (e) {
+      toast(`Couldn't load the full post: ${e.message}. Try again, or open it on LinkedIn.`);
+    } finally {
+      setLoadingFull(false);
+    }
   };
 
   const handleCopyLink = async () => {
@@ -366,9 +385,35 @@ export default function PostCard({ post, onActioned }) {
           {post.summary}
         </p>
       )}
-      <p style={{ color: "#6b7280", fontSize: 13, lineHeight: 1.5, margin: post.summary ? "0 0 12px" : "12px 0" }}>
-        {post.content_snippet}
+      <p
+        style={{
+          color: "#6b7280", fontSize: 13, lineHeight: 1.5, margin: post.summary ? "0 0 12px" : "12px 0",
+          // The full post keeps its line breaks; LinkedIn posts lean on them.
+          whiteSpace: showFull ? "pre-wrap" : undefined,
+        }}
+      >
+        {showFull ? fullPost.text : post.content_snippet}
+        {post.preview_truncated && (
+          <>
+            {showFull ? <br /> : " "}
+            <button
+              onClick={handleToggleFull}
+              disabled={loadingFull}
+              style={{ border: "none", background: "none", padding: 0, fontSize: 13, color: "var(--primary)", whiteSpace: "nowrap" }}
+            >
+              {loadingFull ? "Loading…" : showFull ? "Show less" : "Show full post"}
+            </button>
+          </>
+        )}
       </p>
+      {showFull && fullPost.truncated && (
+        <div style={{ fontSize: 12, color: "var(--text-muted)", margin: "-6px 0 12px" }}>
+          The tool saves posts up to a length limit and this one reached it, so the end is likely missing.{" "}
+          <a href={post.post_url} target="_blank" rel="noreferrer" style={{ color: "var(--primary)", textDecoration: "none" }}>
+            Read the rest on LinkedIn ↗
+          </a>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center" }}>
         <Badge tone={relevanceTone(post.relevance_score ?? 0)}>

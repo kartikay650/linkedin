@@ -23,6 +23,12 @@ from app.config import settings
 
 API_ROOT = "https://api.apify.com/v2"
 
+# The most of a post's text we store. LinkedIn allows 3,000 characters, so a stored body this long
+# was almost certainly cut here, and the dashboard says so (routers/posts.py). Posts saved before
+# 28 Aug 2026 were cut at LEGACY_POST_CHARS instead.
+MAX_POST_CHARS = 2500
+LEGACY_POST_CHARS = 600
+
 
 class ApifyError(Exception):
     def __init__(self, message: str = "", status: int = 0):
@@ -266,7 +272,7 @@ def _normalise(item: dict) -> dict | None:
         # the full argument, which is the root cause of drafts that misread or contradicted a
         # post. 2500 covers virtually every LinkedIn post; the feed is paginated so the extra
         # text costs little egress.
-        "content_snippet": (text or "")[:2500],
+        "content_snippet": (text or "")[:MAX_POST_CHARS],
         "posted_at": _parse_dt(posted),
         "engagement": engagement,
     }
