@@ -28,6 +28,11 @@ API_ROOT = "https://api.apify.com/v2"
 # 28 Aug 2026 were cut at LEGACY_POST_CHARS instead.
 MAX_POST_CHARS = 2500
 LEGACY_POST_CHARS = 600
+# Only a post published before this (naive UTC) can have been cut at LEGACY_POST_CHARS. The 600 cap
+# was removed in 140b006 (27 Aug 19:01 UTC), and d576437 ("Fix live 500", 29 Aug) shows later code
+# was already deployed by then. A post is never scraped before it is published, so every 600-cut
+# post is older than this; setting it a day late only adds false positives, never misses.
+LEGACY_CAP_UNTIL = datetime(2026, 8, 30)
 
 
 class ApifyError(Exception):

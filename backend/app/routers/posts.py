@@ -16,7 +16,8 @@ from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, check_fai
 from app.llm.style import check_violations
 from app.models import Client, ClientDocument, Draft, Post, TweakEvent, text_hash
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
-from app.scraper.apify_client import LEGACY_POST_CHARS, MAX_POST_CHARS, account_usage
+from app.scraper.apify_client import (LEGACY_CAP_UNTIL, LEGACY_POST_CHARS, MAX_POST_CHARS,
+                                      account_usage)
 from app.schemas import (DraftOut, DraftUpdate, ManualDraftRequest, PostTextOut, PostWithDrafts,
                          RefineDraftRequest)
 
@@ -351,15 +352,19 @@ def post_text(post_id: int, db: Session = Depends(get_db)):
     reviewer opened.
 
     `truncated` says the stored text was itself cut at scrape time (apify_client.MAX_POST_CHARS,
-    or LEGACY_POST_CHARS for posts saved before 28 Aug 2026), so the end exists only on LinkedIn.
-    It is inferred from the length, as nothing records it: a post that happens to be exactly that
-    long is flagged too, which only adds a "read the rest on LinkedIn" note."""
-    row = db.query(Post.content_snippet).filter(Post.id == post_id).first()
+    or LEGACY_POST_CHARS for posts published before LEGACY_CAP_UNTIL), so the end exists only on
+    LinkedIn. It is inferred from the length, as nothing records it: a post that happens to be
+    exactly that long is flagged too, which only adds a "read the rest on LinkedIn" note. The date
+    is posted_at (kept when backfill copies a post to another client), else fetched_at."""
+    row = (db.query(Post.content_snippet, func.coalesce(Post.posted_at, Post.fetched_at))
+           .filter(Post.id == post_id).first())
     if row is None:
         raise HTTPException(404, "post not found")
-    text = row[0] or ""
-    return {"id": post_id, "text": text,
-            "truncated": len(text) >= MAX_POST_CHARS or len(text) == LEGACY_POST_CHARS}
+    text, dt = row[0] or "", row[1]
+    if dt is not None and dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    legacy = len(text) == LEGACY_POST_CHARS and dt is not None and dt < LEGACY_CAP_UNTIL
+    return {"id": post_id, "text": text, "truncated": len(text) >= MAX_POST_CHARS or legacy}
 
 
 @router.get("/apify-usage")
