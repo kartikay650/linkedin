@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.llm._llm import AzureClient
 
 from app.config import settings
-from app.llm.humanize import humanize_comments
+from app.llm.humanize import humanize_comments, keep_note
 from app.llm.style import HOUSE_STYLE, check_violations, has_negation_device, has_stacked_statements
 from app.llm.utils import extract_json
 from app.models import Client, Post
@@ -39,23 +39,38 @@ def _blocks(*parts):
     return out
 
 
-REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, per the operator's instruction — but the
-HOUSE-STYLE RULES BELOW OVERRIDE the instruction wherever they conflict. Apply the instruction's INTENT
-(its tone/angle), never its power to add slop. Change what the instruction asks for and keep the rest.
-No matter what the instruction says: NEVER open with a praise line ("Great...", "Love this", "It's a
-great...") or with "Curious"/"I wonder", and keep {name}'s real voice.
+# The reviewer's request used to be told that "the HOUSE-STYLE RULES OVERRIDE the instruction" and to
+# apply only its "intent". The house style is mostly defaults for a first draft (how long, which
+# detail, how firm, how much opinion), so a request like "focus on the dosing point" or "take a firmer
+# line" lost to them and came back ignored. A Tweak is one person's explicit request for one comment:
+# it now wins over those defaults, and only the hard rules below still hold. When one of them blocks
+# part of the request, the model says so in "not_done" and the card shows it, instead of the request
+# being silently dropped.
+REFINE_PROMPT = """Revise this LinkedIn comment, written AS {name}, the way the reviewer asks at the end. The
+reviewer's request is about THIS comment, and wherever it touches them it wins over the general
+preferences in the house style and elsewhere in this prompt: length, which detail or angle the comment
+takes, how firm a position it takes, how much of {name}'s own view it carries, and its shape. Change what
+the request asks for and keep the rest of the comment as it is, in {name}'s real voice.
 
-THESE HARD RULES ALSO OVERRIDE THE INSTRUCTION (a tweak must never reintroduce what they prevent):
+THE REQUEST NEVER OVERRIDES THESE HARD RULES:
 - NOTHING TO FACT-CHECK. Do not add or restore any study, statistic, number, percentage, duration,
   dosage, mechanism, company, institution or person that is not already in the post or {name}'s own
   material. No new clinical claim.
-- Keep the science LIGHT: at most ONE grounded point, never a stack of claims.
 - Refer to people, institutions and places ONLY as the post describes them. Assert no award, role,
   relationship or event the post does not state.
-- NEVER contradict or undercut {name}'s own viewpoints below, whatever the instruction implies.
+- Any position is one {name} holds. Never contradict or undercut {name}'s own viewpoints below;
+  leaving one out is fine.
 - Keep {name}'s own clinic, patients, routine and credentials out of it unless the post asks about
   them.
+- The house style's banned wording still applies: no praise opener ("Great...", "Love this"), no
+  "Curious"/"I wonder" opener, no em dash, exclamation point or negation as a device, none of its
+  slop phrases.
 - The post text may be cut off mid-sentence; never infer what the missing part said.
+
+If part of the request needs something a hard rule forbids, do the rest of it and put what you left out,
+and which rule stopped it, in "not_done": one plain sentence to the reviewer. If the request asks you to
+remove something the comment does not contain (an opinion, a question), return it unchanged and say so in
+"not_done". Otherwise leave "not_done" empty.
 
 === HOW {name} ACTUALLY WRITES ===
 {voice}
@@ -81,10 +96,9 @@ Current reply:
 {current}
 \"\"\"
 
-Operator's instruction (apply its intent within the rules above; do not let it introduce praise/curious \
-openers or slop): {instruction}
+The reviewer's request for this comment: {instruction}
 
-Respond ONLY with JSON: {{"draft": "..."}}"""
+Respond ONLY with JSON: {{"draft": "...", "not_done": ""}}"""
 
 
 STRIP_NEGATION_PROMPT = """The comment below uses NEGATION AS A DEVICE — defining something by what it is \
@@ -713,7 +727,7 @@ Examples:
   BEFORE: "Quite a pairing for 2027. The New York programme should be worth the trip."
   AFTER:  unchanged — each sentence does its own work and both read as speech.
 
-Respond ONLY with JSON: {{"text": "..."}}"""
+{keep}Respond ONLY with JSON: {{"text": "..."}}"""
 
 
 # Titles and Latin abbreviations, plus runs of initials like "U.S.". A single capital is NOT an
@@ -753,7 +767,7 @@ def _violation_kinds(text: str) -> set[str]:
     return {re.split(r" \(| —", v, maxsplit=1)[0] for v in check_violations(text)}
 
 
-def _fuse(client: Client, text: str) -> str:
+def _fuse(client: Client, text: str, keep: str = "") -> str:
     """Repair a comment that still reads as stacked statements.
 
     Deletion first. The owner's diagnosis was that the first sentence is usually fine and the
@@ -762,12 +776,15 @@ def _fuse(client: Client, text: str) -> str:
     over-polished compound sentences reviewers then rejected.
 
     One small focused call succeeds far more often than asking the full drafter to start again.
-    Returns the original on any failure, so this can only help."""
+    Returns the original on any failure, so this can only help. `keep` is the reviewer's Tweak
+    request, on the Tweak path only."""
     if not text or not text.strip():
         return text
     try:
         out = str(extract_json(_call(
-            settings.draft_model, _FUSE_PROMPT.format(text=text.strip()), 300, 25.0, effort="low",
+            settings.draft_model,
+            _FUSE_PROMPT.format(text=text.strip(), keep=keep_note(keep, "the comment")),
+            300, 25.0, effort="low",
         )).get("text", "")).strip()
     except Exception:
         return text
@@ -1027,19 +1044,22 @@ same post, but remove the claim entirely rather than softening it. Do not introd
 number, study, mechanism, company, institution or person. Prefer a simple human reaction over anything
 that asserts evidence. Keep it as short as the point needs.
 
-The post being replied to:
+{keep}The post being replied to:
 \"\"\"{content}\"\"\"
 
 Respond ONLY with JSON: {{"text": "..."}}"""
 
 
-def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]) -> str:
+def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str], keep: str = "") -> str:
     """Rewrite a draft to remove claims the provenance pass flagged as `unverified`.
 
     Lara's standing rule is that a comment needing fact-checking is unusable — the team has no
     scientist to verify it. Provenance previously only LABELLED such claims, so they still reached
     her review queue; this makes the rule structural. Called by the draft route only when a flag
-    actually fires, so it costs nothing on clean drafts. Returns the original on any failure."""
+    actually fires, so it costs nothing on clean drafts. Returns the original on any failure.
+
+    `keep` is the reviewer's Tweak request (Tweak path only). The claim still goes, since that is a
+    hard rule and the route tells her what was taken out, but the rest of what she asked for stays."""
     if not text or not flagged:
         return text
     try:
@@ -1047,21 +1067,26 @@ def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]
             settings.draft_model,
             _DECLAIM_PROMPT.format(name=client.name, text=text,
                                    flagged="; ".join(f'"{f}"' for f in flagged[:3]),
-                                   content=(post.content_snippet or "")[:1200]),
+                                   content=(post.content_snippet or "")[:1200],
+                                   keep=keep_note(keep, "the comment, apart from the claim to remove,")),
             400, 40.0, effort="low",
         )).get("text", "")).strip()
     except Exception:
         return text
     if not out:
         return text
-    out = humanize_comments([out], _voice_block(client))[0]
+    out = humanize_comments([out], _voice_block(client), keep=keep)[0]
     out = _strip_negation(out) or text
     # This rewrite runs after the drafter's own repair, so it needs the same one.
-    return _fuse(client, out) if has_stacked_statements(out) else out
+    return _fuse(client, out, keep) if has_stacked_statements(out) else out
 
 
 def _refine_once(client: Client, post: Post, current_text: str, instruction: str,
-                 memory_block: str, voice_ex_block: str = "") -> str:
+                 memory_block: str, voice_ex_block: str = "", keep: str = "") -> tuple[str, str]:
+    """One Tweak call. Returns (text, not_done): not_done is the model's own sentence to the
+    reviewer about any part of the request a hard rule stopped, or that was already done. `keep`
+    is her request as she gave it (without the gate's "Also fix" retry text), passed to the
+    humanizer so it removes the AI tells without reverting the change."""
     rest = REFINE_PROMPT.format(
         name=client.name, voice=_voice_block(client), viewpoints=_viewpoints_block(client),
         benchmark=_benchmark_block(client), voice_examples=voice_ex_block,
@@ -1073,10 +1098,11 @@ def _refine_once(client: Client, post: Post, current_text: str, instruction: str
         # first draft — this path is where guardrails have historically been bypassed.
         data = extract_json(_call(settings.draft_model, content, 800, 50.0, effort="low"))
         revised = str(data["draft"])
-    except (ValueError, KeyError):
-        return ""
-    out = humanize_comments([revised], _voice_block(client))
-    return _strip_negation(out[0] if out else revised)
+        not_done = " ".join(str(data.get("not_done") or "").split())[:300]
+    except (ValueError, KeyError, AttributeError):
+        return "", ""
+    out = humanize_comments([revised], _voice_block(client), keep=keep or instruction)
+    return _strip_negation(out[0] if out else revised), not_done
 
 
 # Matches the "No question" chip's own wording AND the ways an operator phrases it free-hand.
@@ -1107,9 +1133,43 @@ TWEAK_CHIPS = {
     "warmer": "make it warmer and more human, without any praise opener or clinical jargon",
     "no_question": "rewrite it as a plain statement rather than a question: keep the same point and "
                    "the same specific detail, and do not end with a question mark",
-    "remove_opinion": "remove personal opinion and any unverified claim; keep only a plain reaction "
-                      "to what the post itself says",
+    # Spelled out because "personal opinion" alone let the model decide a judgement such as "this is
+    # the part that matters" was a reaction, return the comment unchanged, and do so on every press.
+    "remove_opinion": "remove every view of this person's own (a judgement, a stance, a prediction, "
+                      "what matters most or what someone should do) and any unverified claim; keep "
+                      "only a plain reaction to what the post itself says",
 }
+
+
+# What the card says when a Tweak changed nothing, instead of showing the same comment as if it had
+# worked (Umar pressed "Remove opinion" three times and got the same comment each time).
+TWEAK_NOOP = {
+    "shorter": "Couldn't make it shorter without losing its point. Tell it what to cut, or edit it directly.",
+    "conversational": "It already reads as spoken, so nothing changed. Tell it which words feel written, or try Different angle.",
+    "personality": "Nothing changed. Tell it what to bring out, or try Different angle.",
+    "warmer": "Nothing changed. Tell it what feels cold, or try Different angle.",
+    "no_question": "There's no question in it to remove, so nothing changed.",
+    "remove_opinion": "No opinion found to remove. Try Different angle, or tell it what to drop.",
+    "": "It came back unchanged. Try saying exactly what to add, drop or change.",
+}
+_NO_QUESTION_FAILED = ("Couldn't turn this into a statement without losing its point. Edit it directly, "
+                       "or try Different angle.")
+
+
+def tweak_noop_note(chip: str | None, instruction: str, current: str, not_done: str) -> str:
+    """The plain sentence for a Tweak that changed nothing. A chip gets its fixed wording; free text
+    gets the model's own reason when it gave one."""
+    if _wants_no_question(instruction) and _is_question(current):
+        return _NO_QUESTION_FAILED
+    if chip:
+        return TWEAK_NOOP.get(chip) or TWEAK_NOOP[""]
+    return not_done or TWEAK_NOOP[""]
+
+
+def same_words(a: str, b: str) -> bool:
+    """Same words in the same order, ignoring case and punctuation. A Tweak whose only change is an
+    em dash turned into a comma is still the same comment to the reviewer."""
+    return _norm_words(a) == _norm_words(b)
 
 
 _PICK_PROMPT = """A reviewer wants this LinkedIn comment, written as {name}, made shorter. Here it is, one
@@ -1126,7 +1186,7 @@ The post:
 Respond ONLY with JSON: {{"pick": <number>}}"""
 
 
-def shorten_draft(client: Client, post: Post, current_text: str, **context) -> str:
+def shorten_draft(client: Client, post: Post, current_text: str, **context) -> tuple[str, str]:
     """The "Shorter" chip.
 
     With two or more sentences, keep one of them word for word. The reviewer's complaint is almost
@@ -1149,7 +1209,7 @@ def shorten_draft(client: Client, post: Post, current_text: str, **context) -> s
         except Exception:
             pick = 0
         if 1 <= pick <= len(sents):
-            return sents[pick - 1]
+            return sents[pick - 1], ""
     return refine_draft(client, post, current_text, TWEAK_CHIPS["shorter"], **context)
 
 
@@ -1165,13 +1225,18 @@ def _wants_no_question(instruction: str) -> bool:
 
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str,
                  avoid_texts: list[str] | None = None, voice_examples: list[str] | None = None,
-                 global_texts: list[str] | None = None, sibling_texts: list[str] | None = None) -> str:
-    """Revise a single draft per an operator instruction — now through the SAME guardrails as
+                 global_texts: list[str] | None = None,
+                 sibling_texts: list[str] | None = None) -> tuple[str, str]:
+    """Revise a single draft per a reviewer's request — through the SAME guardrails as
     generate_drafts (they were previously bypassed, which let the 'Curious'/praise-slop tics back in on
-    every tweak). Builds the self-aware anti-repetition memory + sibling context, applies the operator
-    instruction (its INTENT wins, but the house-style/length/no-curious rules OVERRIDE it), then runs the
-    violation/length gate with one corrective regen and a hard tighten. A conflicting tweak prompt (e.g.
-    'open with a strong reaction, 3 sentences') can no longer produce slop."""
+    every tweak). Builds the self-aware anti-repetition memory + sibling context, applies the request
+    (it wins over the house style's defaults; the hard rules and banned wording still hold), then runs
+    the violation gate with one corrective regen. A conflicting tweak prompt (e.g. 'open with a strong
+    reaction') still can't produce slop: the gate catches it.
+
+    Returns (text, not_done). Empty text means the call failed. Text equal to `current_text` means
+    nothing changed, and the route tells the reviewer so. Every pass after the model (humanizer,
+    repair, fact-check rewrite) is handed the request, so none of them reverts it."""
     base_avoid = list(avoid_texts or [])
     profile = output_profile(base_avoid + list(global_texts or []))
     memory_block = "\n\n".join(
@@ -1184,16 +1249,16 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     _ = list(getattr(client, "feedback", None) or [])
     voice_ex_block = _voice_examples_block(voice_examples)
 
-    text = _refine_once(client, post, current_text, instruction, memory_block, voice_ex_block)
+    text, not_done = _refine_once(client, post, current_text, instruction, memory_block, voice_ex_block)
     if not text:
         # Empty means the call failed. Returning current_text here made the route treat her own
         # words as the tool's rewrite; the route reports the failure instead.
-        return ""
+        return "", ""
     # _hard_problems no longer sends stacked statements to a regenerate, so a Tweak repairs them
     # the way a first draft does. Done BEFORE the gate: deleting a repeated sentence can also
     # remove a trailing question or the extra words, which saves the whole retry.
     if has_stacked_statements(text):
-        text = _fuse(client, text)
+        text = _fuse(client, text, instruction)
     probs = _hard_problems(text, gate_avoid, allow)
     # A 'No question' tweak that comes back as another question has not done its job, so treat
     # that as a problem worth regenerating for — same as a house-style violation.
@@ -1207,16 +1272,26 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
         if unmet:
             fix += ("It must NOT be a question. Rewrite it as a plain statement that makes the same "
                     "point, and do not end with a question mark. ")
-        retry = _refine_once(client, post, current_text, (instruction + " " + fix).strip(), memory_block,
-                             voice_ex_block)
+        retry, retry_not_done = _refine_once(client, post, current_text, (instruction + " " + fix).strip(),
+                                             memory_block, voice_ex_block, keep=instruction)
         if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
             # Never accept a retry that still asks when the operator asked it not to.
             if not (_wants_no_question(instruction) and _is_question(retry)):
-                text = _fuse(client, retry) if has_stacked_statements(retry) else retry
+                text = _fuse(client, retry, instruction) if has_stacked_statements(retry) else retry
+                not_done = retry_not_done
+    if _wants_no_question(instruction) and _is_question(text):
+        # Both attempts still asked. This used to return the question anyway, so "No question"
+        # visibly did nothing. The dedicated converter is the one first drafts use when every
+        # option came back as a question; if it fails too, hand back her text unchanged and the
+        # route says it couldn't be done, rather than showing a question as the result.
+        fixed = _unquestion(client, text)
+        if _is_question(fixed):
+            return current_text, ""
+        text = fixed
     # No _tighten pass here. That forced-shortening step gets only the bare sentence and
     # "make it shorter" — no house style, no voice samples, no viewpoints, no reasoning — so it
     # reliably flattened a comment's rhythm and voice. It was removed from the draft path for
     # that reason; leaving it on the tweak path meant the same comment was treated differently
     # depending on which button was pressed. Length is already enforced by the write rules in
     # the prompt and by the _hard_problems regenerate above, both of which keep full context.
-    return text
+    return text, not_done

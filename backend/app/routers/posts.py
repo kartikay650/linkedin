@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session, aliased, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
-from app.llm.draft import (TWEAK_CHIPS, _sentences, angle_draft, generate_drafts, refine_draft,
-                           shorten_draft, strip_unverifiable)
+from app.llm.draft import (TWEAK_CHIPS, _sentences, angle_draft, generate_drafts, refine_draft, same_words,
+                           shorten_draft, strip_unverifiable, tweak_noop_note)
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, check_failed, verify_claims
 from app.llm.style import check_violations
 from app.models import Client, ClientDocument, Draft, Post, TweakEvent, text_hash
@@ -442,17 +442,24 @@ def _draft_context(db: Session, post: Post):
     return recent, global_recent, approved, siblings
 
 
-def _safety_pass(client: Client, post: Post, text: str, docs_text: str):
+def _safety_pass(client: Client, post: Post, text: str, docs_text: str, keep: str = "",
+                 removed: list[str] | None = None):
     """Provenance + the 'nothing to fact-check' enforcement for one piece of tool-written text.
     Every path that puts new tool text on a card (draft, Tweak, Different angle) runs this, so no
-    path can skip it. No DB access, so it is safe in a worker thread."""
+    path can skip it. No DB access, so it is safe in a worker thread.
+
+    On a Tweak, `keep` is the reviewer's request, so the rewrite takes out only the claim and not
+    the rest of what she asked for, and `removed` collects what was taken out so the card can tell
+    her, rather than her request vanishing without a word."""
     provenance = annotate_provenance(client, post, text, docs_text)
     flagged = _flagged_claims(provenance)
     if flagged:
-        safer = strip_unverifiable(client, post, text, flagged)
+        safer = strip_unverifiable(client, post, text, flagged, keep=keep)
         if safer and safer != text:
             text = safer
             provenance = annotate_provenance(client, post, text, docs_text)
+            if removed is not None:
+                removed.extend(flagged[:3])
     return text, provenance
 
 
@@ -478,6 +485,14 @@ def _set_aside(db: Session, d: Draft) -> None:
         d.status = "rejected"
     else:
         db.delete(d)
+
+
+def _with_note(draft: Draft, note: str) -> DraftOut:
+    """The draft as stored, plus a sentence for the reviewer about this Tweak. Not saved: it is
+    about this one press, and the next Tweak or edit makes it stale."""
+    out = DraftOut.model_validate(draft)
+    out.tweak_note = note or None
+    return out
 
 
 def _log_tweak(db: Session, draft: Draft, post: Post, chip: str | None, instruction: str,
@@ -598,23 +613,33 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
     context = dict(avoid_texts=recent, voice_examples=approved, global_texts=global_recent,
                    sibling_texts=siblings)
     if chip == "shorter":
-        revised = shorten_draft(post.client, post, current, **context)
+        revised, not_done = shorten_draft(post.client, post, current, **context)
     else:
-        revised = refine_draft(post.client, post, current, instruction, **context)
+        revised, not_done = refine_draft(post.client, post, current, instruction, **context)
     if not (revised or "").strip():
         # The model call failed. This used to hand back her own text as if it were the tweak,
         # then run it through the fact-check rewrite and log a tweak that never happened.
         raise HTTPException(502, "couldn't rewrite that one — try again")
-    if _norm(revised) == _norm(current):
-        return draft  # nothing to change (e.g. "No question" on a statement): leave it as it is
+    if same_words(revised, current) or (
+            chip == "shorter" and len(revised.split()) >= len(current.split())):
+        # Nothing changed. This used to return the draft silently, so the card showed the same
+        # comment as if the button had worked: "Remove opinion" pressed three times, the same
+        # comment three times. Say so plainly, and leave the comment and its fact-check as they are.
+        return _with_note(draft, tweak_noop_note(chip, instruction, current, not_done))
     docs_text = _docs_text(db, post.client_id)
+    removed: list[str] = []
     if draft.edited_text and _norm(revised) in {_norm(x) for x in _sentences(current)}:
         # Shorter kept one of HER sentences word for word. Human text is flagged, never rewritten.
         provenance = annotate_provenance(post.client, post, revised, docs_text)
     else:
         # Enforce "nothing to fact-check" on the TWEAK path too. A tweak is a prime way for an
         # unverifiable claim to come back, and previously this route only re-labelled it.
-        revised, provenance = _safety_pass(post.client, post, revised, docs_text)
+        revised, provenance = _safety_pass(post.client, post, revised, docs_text, keep=instruction,
+                                           removed=removed)
+    notes = [not_done] if not_done else []
+    if removed:
+        notes.append("The fact-check took out something it couldn't trace to the post or "
+                     f"{post.client.name}'s material: " + "; ".join(f'"{x}"' for x in removed) + ".")
     _log_tweak(db, draft, post, chip, instruction, current)
     draft.text = revised
     # original_text is deliberately NOT touched here. It is the only record of what the tool
@@ -624,7 +649,7 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
     draft.provenance_hash = _checked_hash(provenance, revised)
     db.commit()
     db.refresh(draft)
-    return draft
+    return _with_note(draft, " ".join(notes))
 
 
 @router.post("/drafts/{draft_id}/angle", response_model=DraftOut)
@@ -654,6 +679,10 @@ def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
                        global_texts=global_recent, sibling_texts=siblings)
     if not text:
         raise HTTPException(502, "couldn't write a different angle — try again")
+    if any(same_words(text, t) for t in taken):
+        # It came back as a comment she has already seen. Saying so beats re-showing it.
+        return _with_note(draft, "Couldn't find a different angle on this post. Tell it which part "
+                                 "to focus on instead.")
     text, provenance = _safety_pass(post.client, post, text, _docs_text(db, post.client_id))
     _log_tweak(db, draft, post, "angle", "", current)
     draft.text = text
