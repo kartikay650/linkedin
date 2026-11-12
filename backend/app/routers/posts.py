@@ -16,8 +16,10 @@ from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, check_fai
 from app.llm.style import check_violations
 from app.models import Client, ClientDocument, Draft, Post, TweakEvent, client_active, text_hash
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
-from app.scraper.apify_client import account_usage
-from app.schemas import DraftOut, DraftUpdate, ManualDraftRequest, PostWithDrafts, RefineDraftRequest
+from app.scraper.apify_client import (LEGACY_CAP_UNTIL, LEGACY_POST_CHARS, MAX_POST_CHARS,
+                                      account_usage)
+from app.schemas import (DraftOut, DraftUpdate, ManualDraftRequest, PostTextOut, PostWithDrafts,
+                         RefineDraftRequest)
 
 router = APIRouter(tags=["posts"])
 
@@ -38,7 +40,8 @@ def _relevance_floor():
 
 
 # How much of a post body the feed ships per card. The card shows a gist under the one-line
-# summary; the full text (now up to 2500 chars, for the drafter) never needs to reach the browser.
+# summary; the full text (up to MAX_POST_CHARS, for the drafter) is fetched for one post at a time
+# by GET /posts/{id}/text, only when a reviewer clicks "Show full post".
 _LIST_PREVIEW_CHARS = 450
 
 
@@ -218,8 +221,8 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
     )
     # Ship a PREVIEW of the post body, not the whole thing. Posts are now stored up to 2500 chars
     # (needed so the drafter sees the full argument), but the card only shows a gist above the
-    # one-line summary, and "Open post" goes to LinkedIn for the rest. Sending the full body for
-    # every card would have made the feed ~4x heavier than before.
+    # one-line summary, and "Show full post" fetches the rest for that one card. Sending the full
+    # body for every card would have made the feed ~4x heavier than before.
     #
     # EXPUNGE FIRST: these instances are only being serialised into the response, and trimming the
     # attribute on a session-attached row would mark it dirty — a later flush would then write the
@@ -230,6 +233,7 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
         body = p.content_snippet or ""
         if len(body) > _LIST_PREVIEW_CHARS:
             p.content_snippet = body[:_LIST_PREVIEW_CHARS].rstrip() + "…"
+            p.preview_truncated = True  # read by PostOut; not a column, and p is detached
         # Slim the provenance trace the same way. The card only renders a count of grounded
         # spans plus the flagged ones (short quote + source link) — the full text and the
         # per-span notes of every grounded span are downloaded and never shown. Single-draft
@@ -353,6 +357,28 @@ def dismiss_post(post_id: int, db: Session = Depends(get_db)):
     post.dismissed = True
     db.commit()
     return {"ok": True}
+
+
+@router.get("/posts/{post_id}/text", response_model=PostTextOut)
+def post_text(post_id: int, db: Session = Depends(get_db)):
+    """The whole stored text of one post, for "Show full post" on the card. The feed ships only a
+    preview, so this is the one place the browser gets the full body, and only for the card a
+    reviewer opened.
+
+    `truncated` says the stored text was itself cut at scrape time (apify_client.MAX_POST_CHARS,
+    or LEGACY_POST_CHARS for posts published before LEGACY_CAP_UNTIL), so the end exists only on
+    LinkedIn. It is inferred from the length, as nothing records it: a post that happens to be
+    exactly that long is flagged too, which only adds a "read the rest on LinkedIn" note. The date
+    is posted_at (kept when backfill copies a post to another client), else fetched_at."""
+    row = (db.query(Post.content_snippet, func.coalesce(Post.posted_at, Post.fetched_at))
+           .filter(Post.id == post_id).first())
+    if row is None:
+        raise HTTPException(404, "post not found")
+    text, dt = row[0] or "", row[1]
+    if dt is not None and dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    legacy = len(text) == LEGACY_POST_CHARS and dt is not None and dt < LEGACY_CAP_UNTIL
+    return {"id": post_id, "text": text, "truncated": len(text) >= MAX_POST_CHARS or legacy}
 
 
 @router.get("/apify-usage")

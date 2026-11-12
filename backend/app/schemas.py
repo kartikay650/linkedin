@@ -174,9 +174,20 @@ class PostOut(BaseModel):
     relevance_reason: str
     summary: str = ""
     fetched_at: datetime
+    # True when the feed shipped only a preview of content_snippet (see _paged_posts); the card
+    # then offers "Show full post", which reads GET /posts/{id}/text.
+    preview_truncated: bool = False
 
     class Config:
         from_attributes = True
+
+
+class PostTextOut(BaseModel):
+    """One post's full stored text, fetched only when a reviewer asks to read the whole post."""
+    id: int
+    text: str
+    # The stored text itself was cut at scrape time, so the end is only on LinkedIn.
+    truncated: bool
 
 
 class DraftOut(BaseModel):

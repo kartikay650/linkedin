@@ -76,6 +76,8 @@ export const api = {
     request("/sync/plan", { method: "POST", body: JSON.stringify({ client_id: clientId ?? null, force }) }),
   syncFire: (profiles) => request("/sync/fire", { method: "POST", body: JSON.stringify({ profiles }) }),
   dismissPost: (postId) => request(`/posts/${postId}/dismiss`, { method: "POST" }),
+  // The feed ships a preview only; this is one post's full stored text, for "Show full post".
+  postText: (postId) => request(`/posts/${postId}/text`),
   apifyUsage: () => request("/apify-usage"),
   analytics: () => request("/analytics"),
 
