@@ -11,15 +11,16 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
 from app.llm.draft import (TWEAK_CHIPS, _sentences, angle_draft, generate_drafts, refine_draft, same_words,
-                           shorten_draft, strip_unverifiable, tweak_noop_note, tweak_unchanged)
+                           shorten_draft, strip_unverifiable, tweak_instruction, tweak_noop_note,
+                           tweak_unchanged)
 from app.llm.provenance import CHECK_FAILED_NOTE, annotate_provenance, check_failed, verify_claims
 from app.llm.style import check_violations
 from app.models import Client, ClientDocument, Draft, Post, TweakEvent, client_active, text_hash
 from app.profiles import MEMBER_ID_SQL_PATTERN, own_identities
 from app.scraper.apify_client import (LEGACY_CAP_UNTIL, LEGACY_POST_CHARS, MAX_POST_CHARS,
                                       account_usage)
-from app.schemas import (DraftOut, DraftUpdate, ManualDraftRequest, PostTextOut, PostWithDrafts,
-                         RefineDraftRequest)
+from app.schemas import (AngleDraftRequest, DraftOut, DraftUpdate, ManualDraftRequest, PostTextOut,
+                         PostWithDrafts, RefineDraftRequest)
 
 router = APIRouter(tags=["posts"])
 
@@ -118,6 +119,20 @@ def _within_feed_quota():
     other = aliased(Post)
     mine = func.coalesce(Post.relevance_score, -1.0)
     theirs = func.coalesce(other.relevance_score, -1.0)
+    # A row that is NOT in its own client's feed must not hold a slot in anyone else's. Priority
+    # rows rank first whatever they score, so a priority client's post scored 2/10 (below even the
+    # priority bar, so hidden from them) still took one of the two slots, and a client who could
+    # actually comment lost the post. Dr. Joe Raffaele has first claim on eight longevity accounts
+    # that other clients also track; every such post he could add nothing to cost one of them a
+    # slot. Mirrors the relevance rule in _visible_conditions: unscored rows and
+    # rows carrying work stay visible to their client, so they keep their place.
+    other_floor = case((other.is_priority, PRIORITY_MIN_RELEVANCE), else_=MIN_DRAFT_RELEVANCE)
+    other_visible = or_(
+        other.relevance_score.is_(None),
+        func.round(other.relevance_score * 10) >= other_floor,
+        exists().where(Draft.post_id == other.id,
+                       Draft.status.in_(("pending", "drafted", "approved", "posted"))),
+    )
     # Ordering key is (is_priority, relevance, client_id). Priority comes FIRST so a client given
     # first claim on a creator keeps a slot even when two other clients score the post higher —
     # that is the whole point of the flag. The second slot still goes to the next-best client.
@@ -128,6 +143,7 @@ def _within_feed_quota():
             other.post_url == Post.post_url,
             other.dismissed.is_(False),
             other.client_id != Post.client_id,
+            other_visible,
             or_(client_active(other.client_id),
                 exists().where(Draft.post_id == other.id, Draft.status == "posted")),
             or_(
@@ -537,8 +553,11 @@ def _with_note(draft: Draft, note: str) -> DraftOut:
 
 def _log_tweak(db: Session, draft: Draft, post: Post, chip: str | None, instruction: str,
                before: str) -> None:
+    """`instruction` is what the reviewer typed: the whole request without a chip, or the words she
+    added to a chip (empty when she pressed the chip alone)."""
+    typed = (instruction or "")[:500]
     db.add(TweakEvent(client_id=post.client_id, post_id=post.id, draft_id=draft.id, chip=chip,
-                      instruction=None if chip else (instruction or "")[:500], before_text=before))
+                      instruction=(typed or None) if chip else typed, before_text=before))
 
 
 @router.post("/posts/{post_id}/draft", response_model=list[DraftOut])
@@ -638,7 +657,10 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
         raise HTTPException(422, f"unknown tweak '{chip}'")
     if chip == "angle":
         raise HTTPException(422, "use POST /drafts/{id}/angle for a different angle")
-    instruction = TWEAK_CHIPS[chip] if chip else (payload.instruction or "").strip()
+    # A chip can carry what she typed in the box too ("Warmer" + "keep the sleep point"). It used to
+    # send its id alone, so the typed words were dropped whenever she pressed a chip.
+    typed = (payload.instruction or "").strip()
+    instruction = tweak_instruction(chip, typed)
     if not instruction:
         raise HTTPException(422, "say how to change it, or pick a tweak")
     if draft.status == "posted":
@@ -652,7 +674,9 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
     recent, global_recent, approved, siblings = _draft_context(db, post)
     context = dict(avoid_texts=recent, voice_examples=approved, global_texts=global_recent,
                    sibling_texts=siblings)
-    if chip == "shorter":
+    if chip == "shorter" and not typed:
+        # Picks one of her sentences verbatim, which can't follow typed words; with them, the
+        # normal Tweak path does "shorter" and what she typed together.
         revised, not_done = shorten_draft(post.client, post, current, **context)
     else:
         revised, not_done = refine_draft(post.client, post, current, instruction, **context)
@@ -665,7 +689,7 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
         # Nothing changed. This used to return the draft silently, so the card showed the same
         # comment as if the button had worked: "Remove opinion" pressed three times, the same
         # comment three times. Say so plainly, and leave the comment and its fact-check as they are.
-        return _with_note(draft, tweak_noop_note(chip, instruction, current, not_done))
+        return _with_note(draft, tweak_noop_note(None if typed else chip, instruction, current, not_done))
     docs_text = _docs_text(db, post.client_id)
     removed: list[str] = []
     if draft.edited_text and _norm(revised) in {_norm(x) for x in _sentences(current)}:
@@ -680,7 +704,7 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
     if removed:
         notes.append("The fact-check took out something it couldn't trace to the post or "
                      f"{post.client.name}'s material: " + "; ".join(f'"{x}"' for x in removed) + ".")
-    _log_tweak(db, draft, post, chip, instruction, current)
+    _log_tweak(db, draft, post, chip, typed, current)
     draft.text = revised
     # original_text is deliberately NOT touched here. It is the only record of what the tool
     # actually produced, and this line is what used to destroy it.
@@ -693,10 +717,13 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
 
 
 @router.post("/drafts/{draft_id}/angle", response_model=DraftOut)
-def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
+def angle_draft_route(draft_id: int, payload: AngleDraftRequest | None = None,
+                      db: Session = Depends(get_db)):
     """Replace one option with a comment on a different angle from everything already shown for
     this post: this option as it stands, what the tool first wrote for it, and the other options.
-    A new first draft for this option, so original_text is reset to it."""
+    A new first draft for this option, so original_text is reset to it. An optional `instruction`
+    is the angle the reviewer typed; without one the tool picks a different detail itself."""
+    focus = ((payload.instruction if payload else "") or "").strip()
     draft = db.get(Draft, draft_id)
     if not draft:
         raise HTTPException(404, "draft not found")
@@ -716,7 +743,7 @@ def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
     taken = list(dict.fromkeys(t.strip() for t in taken if t and t.strip()))
     recent, global_recent, approved, siblings = _draft_context(db, post)
     text = angle_draft(post.client, post, taken, avoid_texts=recent, voice_examples=approved,
-                       global_texts=global_recent, sibling_texts=siblings)
+                       global_texts=global_recent, sibling_texts=siblings, focus=focus)
     if not text:
         raise HTTPException(502, "couldn't write a different angle — try again")
     if any(same_words(text, t) for t in taken):
@@ -724,7 +751,7 @@ def angle_draft_route(draft_id: int, db: Session = Depends(get_db)):
         return _with_note(draft, "Couldn't find a different angle on this post. Tell it which part "
                                  "to focus on instead.")
     text, provenance = _safety_pass(post.client, post, text, _docs_text(db, post.client_id))
-    _log_tweak(db, draft, post, "angle", "", current)
+    _log_tweak(db, draft, post, "angle", focus, current)
     draft.text = text
     draft.original_text = text
     draft.edited_text = None

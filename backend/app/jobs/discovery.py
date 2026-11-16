@@ -10,6 +10,7 @@
 The browser/burner path is gone — Apify is the only provider now.
 """
 import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -274,6 +275,64 @@ def _is_priority_creator(db: Session, client_id: int, source_ref: str) -> bool:
     return row is not None
 
 
+# Words in a name that say nothing about who someone is.
+_NAME_NOISE = frozenset("dr prof professor mr mrs ms md phd mba msc bsc rn do frcp facp jr sr".split())
+
+
+def _name_tokens(name: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z\u00c0-\u024f]+", (name or "").lower())
+            if len(t) > 1 and t not in _NAME_NOISE]
+
+
+def _same_person(a: str, b: str) -> bool:
+    """Do two display names plausibly belong to one person? Surname-led: the last real word of
+    either name appears in the other ("Eric Verdin" / "Dr. Eric Verdin, MD")."""
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return False
+    return ta[-1] in tb or tb[-1] in ta
+
+
+def _tracked_names(db: Session, source_ref: str) -> list[str]:
+    """The names we hold for the profile a post was fetched from: the shared creator row and any
+    hand-picked watch-creator label."""
+    names = [r[0] for r in db.query(Creator.name).filter(Creator.profile_url == source_ref).all()]
+    names += [r[0] for r in db.query(WatchCreator.label).filter(WatchCreator.profile_url == source_ref).all()]
+    return [n for n in names if n and n.strip()]
+
+
+def is_someone_elses_post(db: Session, source_ref: str, raw: dict) -> bool:
+    """True when a post fetched from a tracked profile was written by somebody else: a repost.
+
+    Nobody chose that author for the client, and the post is about whatever they wrote, which is
+    how Noah's feed showed posts "completely different from his profile" (Baba, 10 Nov). The actor
+    is asked for no reposts (apify_client._build_input) and flags the ones it can see; this is the
+    backstop for everything else, including posts already stored that a backfill hands on.
+
+    A different author handle alone is not enough. Creators change handles (Eric Verdin went from
+    eric-verdin-490212 to eric-verdin-md) and their own posts then arrive under the new one, so a
+    differing handle only counts when the author's name doesn't match the name we track them under
+    either. When we can't tell (no handle, a member-ID URL, no name on file), the post is kept: a
+    false drop would hide a real post, which is the thin-queue problem."""
+    if raw.get("is_repost"):
+        return True
+    author = profile_slug(raw.get("author_profile_url") or "")
+    source = profile_slug(source_ref or "")
+    if not author or not source or author == source or author.startswith("acoa"):
+        return False
+    names = _tracked_names(db, source_ref)
+    if not names:
+        return False
+    return not any(_same_person(raw.get("author_name") or "", n) for n in names)
+
+
+def _score(client: Client, post: Post) -> None:
+    score, reason, summary = score_post(client, post)
+    post.relevance_score = score
+    post.relevance_reason = reason
+    post.summary = summary
+
+
 def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -> None:
     # Every path that stores and scores a post comes through here, so this is the backstop: an
     # archived client never gets a new post or a paid relevance call, whichever caller forgot.
@@ -284,6 +343,22 @@ def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -
         # Still dropped from the feed, but first note the member ID, so a future handle change
         # is recognised. This is the only place a client's own post is seen.
         remember_member_id(db, client, raw.get("author_profile_url", ""))
+        return
+    if is_someone_elses_post(db, source_ref, raw):
+        print(f"[discovery] skipped a repost from {source_ref}: {raw.get('author_name') or '?'} "
+              f"{raw.get('post_url') or ''}")
+        return
+    existing = (db.query(Post)
+                .filter(Post.client_id == client.id, Post.post_url == raw["post_url"]).first())
+    if existing is not None:
+        # Seen before. If its relevance call failed, score it now. An unscored post skips the
+        # relevance floor (a failed call must not bury a good post), and nothing ever scored it
+        # again, so every blip left a post in the feed for good, related to the client or not.
+        # The same post comes back on the next fetch of that profile and on an Apify webhook
+        # retry, so this costs one call per post that needs it and nothing otherwise.
+        if existing.relevance_score is None and not existing.dismissed:
+            _score(client, existing)
+            db.commit()
         return
     post = Post(
         client_id=client.id,
@@ -299,17 +374,16 @@ def _save_and_process(db: Session, client: Client, source_ref: str, raw: dict) -
         is_priority=_is_priority_creator(db, client.id, source_ref),
         language=detect_language(raw.get("content_snippet") or ""),
     )
+    # Scored BEFORE the row is saved. It used to be saved, committed, then scored: a webhook that
+    # ran out of time between the two (one profile fans out to every client tracking it, one paid
+    # call each, inside a 60s function) left the post unscored, and so shown whatever it was
+    # about. Now a post is in the feed only with its score, or with a failed score that the next
+    # delivery retries (above).
+    # Relevance is scored so the human can sort/filter; the reply text itself is
+    # never generated until a person clicks "Draft reply". No auto-drafting here.
+    _score(client, post)
     db.add(post)
     try:
         db.commit()
     except IntegrityError:
-        db.rollback()  # already seen this post_url — dedup via the unique constraint
-        return
-
-    # Relevance is scored so the human can sort/filter; the reply text itself is
-    # never generated until a person clicks "Draft reply". No auto-drafting here.
-    score, reason, summary = score_post(client, post)
-    post.relevance_score = score
-    post.relevance_reason = reason
-    post.summary = summary
-    db.commit()
+        db.rollback()  # saved meanwhile by a concurrent delivery — dedup via the unique constraint

@@ -74,9 +74,12 @@ export default function PostCard({ post, onActioned }) {
     ["Remove opinion", "remove_opinion"],
   ];
 
-  // `how` is { chip } for a chip or { instruction } for free text.
+  // `how` is { chip } for a chip or { instruction } for free text. A chip also carries whatever is
+  // typed in the box, so "Warmer" with "keep the sleep point" typed does both. It used to send the
+  // chip alone, and the typed words were dropped without a word.
   const handleRefine = async (draft, how) => {
     if (!how.chip && !(how.instruction || "").trim()) return;
+    const typed = (how.instruction || "").trim();
     setRefining(draft.id);
     setTweakNote((prev) => ({ ...prev, [draft.id]: null }));
     try {
@@ -93,8 +96,10 @@ export default function PostCard({ post, onActioned }) {
         setCheckFailed((prev) => ({ ...prev, [draft.id]: !!u?.check_failed }));
       }
       const updated = how.chip === "angle"
-        ? await api.angleDraft(draft.id)
-        : await api.refineDraft(draft.id, how.chip ? { chip: how.chip } : { instruction: how.instruction.trim() });
+        ? await api.angleDraft(draft.id, typed)
+        : await api.refineDraft(draft.id, how.chip
+          ? (typed ? { chip: how.chip, instruction: typed } : { chip: how.chip })
+          : { instruction: typed });
       // edited_text first: when nothing changed the server returns the draft as stored, and a
       // saved edit must stay in the box rather than the generated text under it.
       const now = updated.edited_text ?? updated.text;
@@ -102,7 +107,7 @@ export default function PostCard({ post, onActioned }) {
       setServerText((prev) => ({ ...prev, [draft.id]: now }));
       setTweakNote((prev) => ({ ...prev, [draft.id]: updated.tweak_note || null }));
       // Keep her request in the box when nothing changed, so she can reword it instead of retyping.
-      if (!how.chip && now !== shown) setTweak((prev) => ({ ...prev, [draft.id]: "" }));
+      if (typed && now !== shown) setTweak((prev) => ({ ...prev, [draft.id]: "" }));
       // Refresh the citation for the rewritten text. Web-checking is manual now
       // (the "Check sources" button) so drafting/tweaking never fires a paid search.
       setProvByDraft((prev) => ({ ...prev, [draft.id]: updated.provenance || [] }));
@@ -551,7 +556,7 @@ export default function PostCard({ post, onActioned }) {
                 <button
                   key={chip}
                   disabled={refining === draft.id}
-                  onClick={() => handleRefine(draft, { chip })}
+                  onClick={() => handleRefine(draft, { chip, instruction: tweak[draft.id] || "" })}
                   style={{
                     padding: "4px 10px", borderRadius: 999, border: "1px solid var(--border)",
                     background: "var(--surface)", fontSize: 12, color: "var(--text-muted)",
@@ -561,7 +566,7 @@ export default function PostCard({ post, onActioned }) {
                 </button>
               ))}
               <input
-                placeholder="or tell it what to change: the angle, the position, what to drop…"
+                placeholder="or tell it what to change: the angle, the position, what to drop… (a button above uses this too)"
                 value={tweak[draft.id] || ""}
                 disabled={refining === draft.id}
                 onChange={(e) => setTweak((p) => ({ ...p, [draft.id]: e.target.value }))}

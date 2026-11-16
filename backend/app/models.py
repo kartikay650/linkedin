@@ -375,7 +375,7 @@ class TweakEvent(Base):
     post_id = Column(Integer, nullable=True)
     draft_id = Column(Integer, nullable=True)
     chip = Column(String(32), nullable=True)        # None for a free-text instruction
-    instruction = Column(Text, nullable=True)       # free text only, capped at 500 chars
+    instruction = Column(Text, nullable=True)       # what was typed (alone, or with a chip), max 500 chars
     before_text = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 

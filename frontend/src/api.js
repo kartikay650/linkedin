@@ -65,8 +65,10 @@ export const api = {
   // the chip wording.
   refineDraft: (draftId, body) =>
     request(`/drafts/${draftId}/refine`, { method: "POST", body: JSON.stringify(body) }),
-  angleDraft: (draftId) =>
-    request(`/drafts/${draftId}/angle`, { method: "POST" }),
+  angleDraft: (draftId, instruction = "") =>
+    request(`/drafts/${draftId}/angle`, instruction
+      ? { method: "POST", body: JSON.stringify({ instruction }) }
+      : { method: "POST" }),
   manualDraft: (postId, text) =>
     request(`/posts/${postId}/manual-draft`, { method: "POST", body: JSON.stringify({ text }) }),
   recheckDraft: (draftId) => request(`/drafts/${draftId}/recheck`, { method: "POST" }),

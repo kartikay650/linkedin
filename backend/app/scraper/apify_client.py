@@ -44,9 +44,19 @@ class ApifyError(Exception):
 def _build_input(profile_url: str, limit: int) -> dict:
     raw = settings.apify_input_json.replace("{url}", profile_url).replace("{limit}", str(limit))
     try:
-        return json.loads(raw)
+        payload = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ApifyError(f"apify_input_json is not valid JSON after substitution: {e}: {raw!r}") from e
+    # Plain reposts out, unless the configured input says otherwise. The actor scrapes "all posts"
+    # by default, reposts included, and a repost is SOMEONE ELSE's post: an author nobody chose for
+    # this client, on whatever topic they wrote about. That is how Noah's feed filled with posts
+    # "that have nothing to do with him" (Baba, 10 Nov). It also thins every queue: a tracked
+    # creator is fetched for ONE post per sync (_GLOBAL_POSTS), and when that one is a repost the
+    # slot is spent on a post the relevance floor or the colleague filter then hides. Quote posts
+    # (a repost with the creator's own commentary) are the creator's words and stay.
+    if isinstance(payload, dict):
+        payload.setdefault("includeReposts", False)
+    return payload
 
 
 def _first(item: dict, *keys):
@@ -232,6 +242,23 @@ def _parse_dt(value):
         return None
 
 
+def _is_repost(item: dict, text: str) -> bool:
+    """A plain repost (someone else's post shared without the creator's own words), from the markers
+    actors use for one. The actor input already asks for no reposts (_build_input); this catches a
+    run fired with an older input, or an actor that ignores the flag. A quote post carries the
+    creator's own commentary as its text, so it is never called a repost here."""
+    if not isinstance(item, dict):
+        return False
+    if item.get("isRepost") is True or str(item.get("type") or "").lower() in ("repost", "reshare"):
+        return True
+    header = item.get("header")
+    header_text = header.get("text") if isinstance(header, dict) else header
+    if isinstance(header_text, str) and "reposted" in header_text.lower():
+        return True
+    nested = item.get("repost") or item.get("resharedPost") or item.get("reshared")
+    return isinstance(nested, dict) and not (text or "").strip()
+
+
 def _normalise(item: dict) -> dict | None:
     """Map one raw actor item to our post shape, tolerating both flat schemas
     (supreme_coder-style) and nested ones (harvestapi-style). Returns None if it
@@ -269,6 +296,7 @@ def _normalise(item: dict) -> dict | None:
     posted = _nested(item, "postedAt", "date") or _first(item, "postedAtISO", "postedAt", "publishedAt", "date")
 
     return {
+        "is_repost": _is_repost(item, text),
         "author_name": author_name,
         "author_profile_url": author_url or "",
         "post_url": post_url,

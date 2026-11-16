@@ -271,13 +271,26 @@ def _voice_examples_block(texts: list[str] | None) -> str:
     )
 
 
-def _avoid_block(avoid_texts: list[str] | None) -> str:
+def _avoid_block(avoid_texts: list[str] | None, tweak: bool = False) -> str:
     """Show the client's recent comments so the model writes something structurally
-    different — the core fix for the 'every comment sounds the same' repetition."""
+    different — the core fix for the 'every comment sounds the same' repetition.
+
+    `tweak=True` is the Tweak path. The first-draft wording ("a different opening word, a different
+    sentence shape, a different angle") told a Tweak to rebuild the comment the reviewer had asked
+    to change in one way only, so "warmer" or "focus on the dosing point" came back as a different
+    comment (Baba, 10 Nov: "completely ignores the changes I want"). On a Tweak the list only stops
+    the model borrowing their phrasings."""
     texts = [t.strip() for t in (avoid_texts or []) if t and t.strip()][:12]
     if not texts:
         return ""
     lines = "\n".join(f"- {t}" for t in texts)
+    if tweak:
+        return (
+            "=== RECENT COMMENTS ALREADY WRITTEN FOR THIS CLIENT ===\n"
+            "Do not borrow phrasings from these. This is not a reason to change the opening, the "
+            "shape or the angle of the comment you are revising: change only what the reviewer "
+            "asks.\n" + lines + "\n=== END ==="
+        )
     return (
         "=== RECENT COMMENTS ALREADY WRITTEN FOR THIS CLIENT — do NOT sound like these ===\n"
         "Your reply must be clearly different from every one below: a different opening word, a "
@@ -986,7 +999,7 @@ _CONDOLENCE_RE = re.compile(r"\b(sorry for|sorry to hear|so sorry|condolence|res
 
 def angle_draft(client: Client, post: Post, taken: list[str], avoid_texts: list[str] | None = None,
                 voice_examples: list[str] | None = None, global_texts: list[str] | None = None,
-                sibling_texts: list[str] | None = None) -> str:
+                sibling_texts: list[str] | None = None, focus: str = "") -> str:
     """One new comment on a different angle from everything the reviewer has already seen.
 
     "Regenerate" replaces both options with two fresh ones that cannot see what they replace, so
@@ -1002,6 +1015,14 @@ def angle_draft(client: Client, post: Post, taken: list[str], avoid_texts: list[
              + listed + "\nReact to a different detail or a different part of the post from all of "
              "them, in different words, with a different opening. If the post has only one point, or "
              "it is a personal moment, say it differently instead." + _CONDOLENCE)
+    # `focus` is what the reviewer typed in the Tweak box before pressing Different angle ("the
+    # dosing point", "agree with her on sleep"). The button used to send nothing, so the angle she
+    # asked for was dropped and the tool picked its own.
+    focus = " ".join((focus or "").split())[:500]
+    if focus:
+        shape += (f' The reviewer says which angle she wants: "{focus}". Take that angle; it wins '
+                  "over picking a detail yourself. The hard rules still hold: nothing to fact-check, "
+                  f"and only positions {client.name} holds.")
     allow = _prediagnosis(post)
     gate = gate_avoid + taken
     post_words = _content_words(post.content_snippet or "")
@@ -1165,11 +1186,66 @@ _NO_QUESTION_FAILED = ("Couldn't turn this into a statement without losing its p
                        "or try Different angle.")
 
 
+def tweak_instruction(chip: str | None, typed: str = "") -> str:
+    """The request a Tweak runs: the chip's wording, the reviewer's own words, or both.
+
+    A chip used to send only its id, so whatever she had typed in the box ("warmer, but keep the
+    sleep point") was dropped without a word when she pressed Warmer instead of Tweak. Both now
+    reach the model, her words last so they read as the specific part of the request."""
+    typed = " ".join((typed or "").split())[:500]
+    base = TWEAK_CHIPS.get(chip or "", "")
+    if base and typed:
+        return f"{base}. Also, in the reviewer's own words: {typed}"
+    return base or typed
+
+
+# Wording that carries a view of the client's own, for enforcing "Remove opinion". The chip spells
+# out what counts as an opinion, but the model could still decide "this is the part that matters"
+# was a reaction and hand back the same comment, every press (Umar, 10 Nov). This is the check the
+# result has to pass, the way "No question" is checked for a question mark. It errs towards
+# catching: a false hit costs one retry and a note on the card, never a changed comment.
+_OPINION_RE = re.compile(
+    r"\bI(?:'d| would)? (?:think|believe|feel|suspect|bet|argue|reckon)\b"
+    r"|\bin my (?:view|opinion|experience)\b|\bfor me\b|\bto me\b|\bmy (?:take|view|sense)\b"
+    r"|\b(?:should|shouldn'?t|must|ought to|needs? to|have to|has to)\b"
+    r"|\b(?:the|that'?s the|this is the) (?:key|real|bigger|hard|important|right|wrong|missing) "
+    r"(?:part|point|question|issue|thing|lesson|call|move|piece|step)\b"
+    r"|\bwhat (?:really )?(?:matters|counts)\b|\bmatters (?:most|more)\b|\bthe point is\b"
+    r"|\b(?:overrated|underrated|undervalued|overlooked|underappreciated)\b"
+    r"|\b(?:will|is going to|are going to) (?:change|transform|define|become|be the)\b",
+    re.I)
+_NO_OPINION_RE = re.compile(
+    r"remove every view|(?:remove|drop|cut|take out|strip|lose) (?:the |my |your |her |his |any |all )?"
+    r"(?:personal )?(?:opinions?|views?|stance)|no (?:personal )?opinion|without (?:an |any )?opinion"
+    r"|keep it neutral|more neutral", re.I)
+
+
+def opinion_phrases(text: str) -> list[str]:
+    """The phrases in a comment that read as the client's own view, in order, deduplicated."""
+    out: list[str] = []
+    for m in _OPINION_RE.finditer(text or ""):
+        p = m.group(0).lower()
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def _wants_no_opinion(instruction: str) -> bool:
+    """The "Remove opinion" chip, or free text asking the same."""
+    return bool(_NO_OPINION_RE.search(instruction or ""))
+
+
 def tweak_noop_note(chip: str | None, instruction: str, current: str, not_done: str) -> str:
     """The plain sentence for a Tweak that changed nothing. A chip gets its fixed wording; free text
     gets the model's own reason when it gave one."""
     if _wants_no_question(instruction) and _is_question(current):
         return _NO_QUESTION_FAILED
+    if _wants_no_opinion(instruction) and opinion_phrases(current):
+        # "No opinion found" is wrong when the comment plainly still has one. Name it, so she can
+        # cut it herself or say exactly what to drop.
+        found = ", ".join(f'"{p}"' for p in opinion_phrases(current)[:3])
+        return (f"Couldn't take the view out without losing the comment ({found}). Edit those words "
+                "directly, or try Different angle.")
     if chip:
         return TWEAK_NOOP.get(chip) or TWEAK_NOOP[""]
     return not_done or TWEAK_NOOP[""]
@@ -1246,11 +1322,11 @@ _GATE_NOTES = {
 }
 
 
-def _gate_note(first_probs: list[str], final: str, gate_avoid: list[str], allow: bool) -> str:
+def _gate_note(first_probs: list[str], final_probs: list[str]) -> str:
     """Plain sentences for the gate checks the first attempt failed and the accepted retry fixed."""
     def kinds(probs: list[str]) -> set[str]:
         return {re.split(r" \(| —", p, maxsplit=1)[0] for p in probs}
-    fixed = kinds(first_probs) - kinds(_hard_problems(final, gate_avoid, allow))
+    fixed = kinds(first_probs) - kinds(final_probs)
     return " ".join(note for kind, note in _GATE_NOTES.items() if kind in fixed)
 
 
@@ -1283,7 +1359,8 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     base_avoid = list(avoid_texts or [])
     profile = output_profile(base_avoid + list(global_texts or []))
     memory_block = "\n\n".join(
-        b for b in (_self_awareness_block(profile), _siblings_block(sibling_texts, client.name), _avoid_block(base_avoid)) if b
+        b for b in (_self_awareness_block(profile), _siblings_block(sibling_texts, client.name),
+                    _avoid_block(base_avoid, tweak=True)) if b
     )
     gate_avoid = base_avoid + [t.strip() for t in (sibling_texts or []) if t and t.strip()]
     allow = _prediagnosis(post)
@@ -1291,6 +1368,17 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     # them, and every other chip is better anchored with them.
     _ = list(getattr(client, "feedback", None) or [])
     voice_ex_block = _voice_examples_block(voice_examples)
+    no_question = _wants_no_question(instruction)
+    no_opinion = _wants_no_opinion(instruction)
+
+    def gate(t: str) -> list[str]:
+        # The opening she already had is hers to keep. Flagging it as "the same opening as a
+        # recent comment" sent the retry off to rewrite the start of a comment she had asked to
+        # change somewhere else, which is one way a Tweak came back as something she didn't ask for.
+        probs = _hard_problems(t, gate_avoid, allow)
+        if _opener(t) == _opener(current_text):
+            probs = [p for p in probs if p != "same opening as a recent comment"]
+        return probs
 
     text, not_done = _refine_once(client, post, current_text, instruction, memory_block, voice_ex_block)
     if not text:
@@ -1302,29 +1390,42 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     # remove a trailing question or the extra words, which saves the whole retry.
     if has_stacked_statements(text):
         text = _fuse(client, text, instruction)
-    probs = _hard_problems(text, gate_avoid, allow)
+    probs = gate(text)
     # A 'No question' tweak that comes back as another question has not done its job, so treat
-    # that as a problem worth regenerating for — same as a house-style violation.
-    unmet = _wants_no_question(instruction) and _is_question(text)
+    # that as a problem worth regenerating for — same as a house-style violation. "Remove opinion"
+    # is checked the same way: a result that still says "should" or "the key point" has not done it,
+    # whether the model changed nothing or rewrote around the view.
+    unmet = no_question and _is_question(text)
+    left = opinion_phrases(text) if no_opinion else []
     # NO 26-word ceiling here. It existed only on this path, so pressing Tweak quietly cut a
     # comment that the drafter was free to write at any length, and it contradicted the house
     # style ("LENGTH: your judgement, taken from the post"). Genuine rambling is already a
     # violation inside _hard_problems at 60 words, which is where a length rule belongs.
-    if probs or unmet:
+    if probs or unmet or left:
         fix = ("; ".join(probs) + ". ") if probs else ""
         if unmet:
             fix += ("It must NOT be a question. Rewrite it as a plain statement that makes the same "
                     "point, and do not end with a question mark. ")
+        if left:
+            fix += (f"It still carries {client.name}'s own view: "
+                    + ", ".join(f'"{p}"' for p in left[:5])
+                    + ". Take each of those out and keep only a plain reaction to what the post "
+                      "itself says. ")
         retry, retry_not_done = _refine_once(client, post, current_text, instruction,
                                              memory_block, voice_ex_block, check=fix.strip())
-        if retry and len(_hard_problems(retry, gate_avoid, allow)) <= len(probs):
-            # Never accept a retry that still asks when the operator asked it not to.
-            if not (_wants_no_question(instruction) and _is_question(retry)):
-                text = _fuse(client, retry, instruction) if has_stacked_statements(retry) else retry
-                # The gate can overrule her ("expand on this" vs the 60-word limit, "firmer" vs
-                # the over-certainty check). Say what it enforced instead of dropping it silently.
-                not_done = " ".join(x for x in (retry_not_done, _gate_note(probs, text, gate_avoid, allow)) if x)
-    if _wants_no_question(instruction) and _is_question(text):
+        if retry and has_stacked_statements(retry):
+            retry = _fuse(client, retry, instruction)
+        retry_probs = gate(retry) if retry else []
+        if (retry and len(retry_probs) <= len(probs)
+                # Never accept a retry that still asks when the operator asked it not to, or that
+                # carries more of a view than the first attempt when she asked for none.
+                and not (no_question and _is_question(retry))
+                and not (no_opinion and len(opinion_phrases(retry)) > len(left))):
+            text = retry
+            # The gate can overrule her ("expand on this" vs the 60-word limit, "firmer" vs
+            # the over-certainty check). Say what it enforced instead of dropping it silently.
+            not_done = " ".join(x for x in (retry_not_done, _gate_note(probs, retry_probs)) if x)
+    if no_question and _is_question(text):
         # Both attempts still asked. This used to return the question anyway, so "No question"
         # visibly did nothing. The dedicated converter is the one first drafts use when every
         # option came back as a question; if it fails too, hand back her text unchanged and the
@@ -1333,6 +1434,12 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
         if _is_question(fixed):
             return current_text, ""
         text = fixed
+    if no_opinion and not same_words(text, current_text) and opinion_phrases(text):
+        # Changed, but some of the view survived both attempts. Show the result and say what is
+        # left, rather than present it as done.
+        found = ", ".join(f'"{p}"' for p in opinion_phrases(text)[:3])
+        not_done = " ".join(x for x in (not_done, f"Still reads as a view: {found}. Cut those "
+                                                  "words if they should go.") if x)
     # No _tighten pass here. That forced-shortening step gets only the bare sentence and
     # "make it shorter" — no house style, no voice samples, no viewpoints, no reasoning — so it
     # reliably flattened a comment's rhythm and voice. It was removed from the draft path for

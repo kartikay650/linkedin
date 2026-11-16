@@ -44,8 +44,17 @@ failure. The items being built now (Phases 0, 1, 3 and 4) are in the git history
   date. Lara's, Silvana's and Joanna's own posts are never fetched today. No keyword discovery of
   untracked accounts yet (~$35/month, 10-26 MB/month). "Upcoming content" has no data source in
   `public`; a calendar in the portal schema would need Kartikay's explicit OK.
-- **Thin queues.** Nikolina, Noah and Silvana each have about 4 fresh posts. That's a short
-  tracked-creator list, not a ranking problem.
+- **Thin queues.** Nikolina, Noah and Silvana each have about 4 fresh posts. Partly fixed on
+  fix/am-feedback-10-nov: reposts no longer use up a creator's one post per fetch, a failed
+  relevance score is retried when the post comes back, and a priority row below its own bar no
+  longer takes one of the two feed slots. To see what still thins a queue, run (read-only)
+  `python -m app.jobs.queue_report "Nikolina"` from backend/ with the production DATABASE_URL. It
+  counts posts by where they went (in the feed, below the bar, lost to the cap and to whom,
+  dismissed, other language) and lists assigned profiles that are never fetched. If few posts are
+  stored at all, the next lever is `_GLOBAL_POSTS` (1 post per creator per fetch), which costs
+  Apify credit per extra post and one relevance call per post per client.
+- **Reposts already stored.** Stopping reposts applies to new fetches. The ones already in feeds
+  age out of the 14-day window on their own; dismiss any that bother a reviewer.
 - **Fact-check badge conflates opinion with fact.** 23% of "grounded" spans are grounded in a
   client's stated belief, and the card shows them as "Nothing to verify". Split the badge (from
   the post vs from their stated view), and consider a `contested` provenance level.

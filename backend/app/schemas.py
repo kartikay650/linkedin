@@ -223,9 +223,15 @@ class DraftUpdate(BaseModel):
 
 class RefineDraftRequest(BaseModel):
     # A chip sends its id ("warmer", "shorter", ...) and the server holds the wording; free text
-    # sends `instruction`. One of the two is required.
+    # sends `instruction`. One of the two is required. Both together = the chip plus what the
+    # reviewer typed in the box.
     instruction: str = ""
     chip: str | None = None
+
+
+class AngleDraftRequest(BaseModel):
+    # Optional: the angle the reviewer typed before pressing Different angle.
+    instruction: str = ""
 
 
 class PostWithDrafts(PostOut):
