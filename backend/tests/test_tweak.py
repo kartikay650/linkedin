@@ -211,3 +211,20 @@ def test_angle_focus_reaches_the_prompt(client_post, monkeypatch):
                         "The magnesium table in the post is the part a patient can act on tonight.")
     D.angle_draft(c, p, [OPINION], focus="the magnesium table")
     assert 'which angle she wants: "the magnesium table"' in shapes[0]
+
+
+def test_negated_remove_opinion_is_not_a_request_to_remove():
+    from app.llm.draft import _wants_no_opinion
+    assert not _wants_no_opinion("don't remove the opinion, just make it warmer")
+    assert not _wants_no_opinion("warmer but do not drop the stance")
+    assert not _wants_no_opinion("don’t remove my view")
+    assert _wants_no_opinion("remove the opinion")
+    assert _wants_no_opinion("make it warmer and drop the opinion")
+    assert _wants_no_opinion("write it without an opinion")
+    assert _wants_no_opinion("no opinion please")
+
+
+def test_curly_apostrophes_count_as_opinion():
+    from app.llm.draft import opinion_phrases
+    assert "shouldn't" in opinion_phrases("Clinics shouldn’t wait.")
+    assert opinion_phrases("I’d think so")

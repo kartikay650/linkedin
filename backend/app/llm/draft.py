@@ -1220,10 +1220,21 @@ _NO_OPINION_RE = re.compile(
     r"|keep it neutral|more neutral", re.I)
 
 
+# Curly apostrophes ("shouldn’t", "I’d think") read as straight ones for both checks.
+def _straight(text: str) -> str:
+    return (text or "").replace("\u2019", "'").replace("\u2018", "'")
+
+
+# "don't remove the opinion", "do not drop the stance": the words just before a match that turn
+# it round. Without this, typing "don't remove the opinion, just make it warmer" stripped her view
+# (review, 17 Nov).
+_NEGATED_BEFORE_RE = re.compile(r"\b(?:don'?t|do not|does not|doesn'?t|not|never|no need to|without)\s+(?:\w+\s+)?$", re.I)
+
+
 def opinion_phrases(text: str) -> list[str]:
     """The phrases in a comment that read as the client's own view, in order, deduplicated."""
     out: list[str] = []
-    for m in _OPINION_RE.finditer(text or ""):
+    for m in _OPINION_RE.finditer(_straight(text)):
         p = m.group(0).lower()
         if p not in out:
             out.append(p)
@@ -1232,7 +1243,14 @@ def opinion_phrases(text: str) -> list[str]:
 
 def _wants_no_opinion(instruction: str) -> bool:
     """The "Remove opinion" chip, or free text asking the same."""
-    return bool(_NO_OPINION_RE.search(instruction or ""))
+    text = _straight(instruction)
+    for m in _NO_OPINION_RE.finditer(text):
+        # "without an opinion" and "no opinion" carry their own negation and mean remove it.
+        if m.group(0).lower().startswith(("without", "no ")):
+            return True
+        if not _NEGATED_BEFORE_RE.search(text[:m.start()]):
+            return True
+    return False
 
 
 def tweak_noop_note(chip: str | None, instruction: str, current: str, not_done: str) -> str:
