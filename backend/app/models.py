@@ -97,7 +97,7 @@ def client_active(client_id_col):
     Archiving only hid a client from the sidebar. Every other query still treated them as live, so
     Marwan Karnaby, archived when the team stopped commenting for him, kept having profiles fetched
     for him, posts relevance-scored for him (a paid call each), and his rows kept taking slots under
-    the two-feeds-per-post cap away from clients still being served. Use this in every query that
+    the two-feeds-per-post cap (since removed) from clients still being served. Use this in every query that
     decides who is fetched for, fanned out to, scored, counted or shown alongside other clients,
     so the next such query has one thing to remember.
 
@@ -109,7 +109,7 @@ def client_active(client_id_col):
 
     Works on any client id column, Client.id included. NOT IN over the primary key (never NULL)
     plans as a hashed subplan: clients is read once per statement and each row is one hash probe,
-    so it is cheap even inside the feed quota's per-row subquery. correlate(None) keeps the inner
+    so it is cheap even inside a per-row subquery. correlate(None) keeps the inner
     SELECT self-contained when the outer query also reads clients."""
     return client_id_col.not_in(
         select(Client.id).where(Client.archived.is_(True)).correlate(None)
@@ -267,7 +267,8 @@ class Post(Base):
 
     author_name = Column(String, default="")
     author_profile_url = Column(String, default="")
-    # indexed: the feed quota looks up sibling rows by post_url (see routers/posts.py)
+    # indexed (unique per client_id, post_url). The other-clients label matches by id/slug instead,
+    # see routers/posts._others_on_post.
     post_url = Column(String, nullable=False, index=True)  # unique per (client_id, post_url), see __table_args__
     # Stamped at scrape time from the creator_clients.priority flag, NOT computed when the feed is
     # read. Two reasons: the read-time version needs a correlated subquery per row inside the feed

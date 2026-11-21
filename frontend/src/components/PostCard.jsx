@@ -59,6 +59,12 @@ export default function PostCard({ post, onActioned }) {
   const workingDrafts = post.drafts.filter((d) => ["pending", "drafted", "approved"].includes(d.status));
   const postedDraft = post.drafts.find((d) => d.status === "posted");
   const stage = postStage(post); // active | draft | approved | posted
+  const alsoPosted = post.also_posted_by || [];
+  const alsoApproved = post.also_approved_for || [];
+  // This client's own comment is approved or posted already: the label is information, not advice.
+  const ownComment = stage === "approved" || stage === "posted";
+  // Team rule: no more than 2 of our clients under one post, counting approved ones on their way.
+  const postFull = !ownComment && alsoPosted.length + alsoApproved.length >= 2;
 
   // Chip ids only: the wording lives on the server (TWEAK_CHIPS in backend/app/llm/draft.py), so
   // a chip can't drift from the checks that enforce it, and chip use is logged by id. Removed:
@@ -441,10 +447,36 @@ export default function PostCard({ post, onActioned }) {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
         <Badge tone={relevanceTone(post.relevance_score ?? 0)}>
           relevance {Math.round((post.relevance_score ?? 0) * 10)}/10
         </Badge>
+        {/* Other clients already under this LinkedIn post. The tool no longer limits how many
+            feeds a post reaches; the team rule is no more than 2 of our clients per post, and
+            this is how the account manager keeps to it. Approved counts too, since it is about to
+            go out. On a card where this client already commented, it is information only. Counts
+            only comments marked in the tool. */}
+        {alsoPosted.length > 0 && (
+          <span title={postFull
+            ? "2 of our clients are already on this post. Our rule is max 2, so skip this one."
+            : ownComment
+              ? "Other clients of ours also commented under this post."
+              : "Another of our clients already commented here. Max 2 of our clients per post."}>
+            <Badge tone={postFull ? "danger" : ownComment ? "neutral" : "warning"}>
+              {postFull ? "Skip · " : ""}{ownComment ? "Also commented" : "Already commented"}:{" "}
+              {alsoPosted.join(", ")}
+            </Badge>
+          </span>
+        )}
+        {alsoApproved.length > 0 && (
+          <span title={postFull
+            ? "2 of our clients are already on this post (posted or about to be). Max 2, so skip this one."
+            : "Approved for another client and not marked posted yet"}>
+            <Badge tone={postFull ? "danger" : "neutral"}>
+              {postFull && alsoPosted.length === 0 ? "Skip · " : ""}Approved for: {alsoApproved.join(", ")}
+            </Badge>
+          </span>
+        )}
         {stage !== "active" && (
           <span
             style={{

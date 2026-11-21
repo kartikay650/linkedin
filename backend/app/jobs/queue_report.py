@@ -2,9 +2,9 @@
 
 R27 (Umar, 10-11 Nov 2026): "very few comments for Nikolina" for 2-3 days, though all her
 prospects are marked. A thin queue has several possible causes, and they need different fixes:
-too few tracked profiles, profiles not fetched lately, posts hidden by the relevance bar, posts
-lost to the two-feeds-per-post cap (and to whom), reposts, other languages. This counts each
-one for the window the feed shows, so the cause is read off instead of guessed.
+too few tracked profiles, profiles not fetched lately, posts hidden by the relevance bar, reposts,
+other languages. This counts each one for the window the feed shows, so the cause is read off
+instead of guessed.
 
 Run from backend/ with the production DATABASE_URL in the environment:
     python -m app.jobs.queue_report "Nikolina"            # last 14 days
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.models import Client, Creator, CreatorClient, Post, WatchCreator, client_active
+from app.models import Client, Creator, CreatorClient, Post, WatchCreator
 from app.profiles import profile_slug
 from app.routers.posts import (MIN_DRAFT_RELEVANCE, PRIORITY_MIN_RELEVANCE, _HAS_WORK,
                                _visible_conditions)
@@ -53,7 +53,6 @@ def report(db: Session, client: Client, days: int = 14) -> dict:
     with_work = {r[0] for r in db.query(Post.id).filter(Post.client_id == client.id, dt >= cutoff, _HAS_WORK).all()}
 
     reasons: Counter = Counter()
-    lost_to: Counter = Counter()
     per_day: Counter = Counter()
     for p in rows:
         per_day[str((p.posted_at or p.fetched_at).date())] += 1
@@ -69,19 +68,9 @@ def report(db: Session, client: Client, days: int = 14) -> dict:
               and p.id not in with_work):
             reasons["below the relevance bar"] += 1
         else:
-            others = (db.query(Post.client_id, Client.name, Post.relevance_score, Post.is_priority)
-                      .join(Client, Client.id == Post.client_id)
-                      .filter(Post.post_url == p.post_url, Post.client_id != client.id,
-                              Post.dismissed.is_(False), client_active(Post.client_id)).all())
-            if len(others) >= 2:
-                reasons["lost to the two-feeds-per-post cap"] += 1
-                # The two that rank first: priority, then score (as _within_feed_quota orders them).
-                ahead = sorted(others, key=lambda o: (bool(o[3]), o[2] if o[2] is not None else -1.0),
-                               reverse=True)[:2]
-                for _, name, score, prio in ahead:
-                    lost_to[f"{name}{' (priority)' if prio else ''}"] += 1
-            else:
-                reasons["hidden for another reason (own or colleague post?)"] += 1
+            # The two-feeds-per-post cap was removed on 21 Nov 2026, so nothing is lost to other
+            # clients any more; what is left is the client's own or a colleague's post.
+            reasons["hidden for another reason (own or colleague post?)"] += 1
 
     elsewhere = sum(1 for p in rows if profile_slug(p.author_profile_url or "")
                     and profile_slug(p.source_ref or "")
@@ -94,7 +83,6 @@ def report(db: Session, client: Client, days: int = 14) -> dict:
         "unscored": sum(1 for p in rows if p.relevance_score is None),
         "author_differs_from_tracked_profile (reposts or handle changes)": elsewhere,
         "where_they_went": dict(reasons.most_common()),
-        "cap_slots_taken_by": dict(lost_to.most_common()),
         "stored_per_day": dict(sorted(per_day.items())),
     }
 

@@ -127,7 +127,12 @@ def test_failed_score_is_retried_when_the_post_comes_back(tracked, monkeypatch):
     assert scorer.calls == 2
 
 
-# --- Two-feeds-per-post cap: a row hidden from its own client takes no slot -----------------
+# --- No feed cap; each card names the other clients already on that post --------------------
+# Lara, 20 Nov 2026: show every relevant post to every client and let the account manager decide,
+# with a label when other clients already commented. Replaces the two-feeds-per-post cap.
+
+URL = "https://www.linkedin.com/posts/peterattiamd_sleep-activity-7520308138625953793-AN9B"
+
 
 def _feed(db, client_id):
     return {p.post_url for p in db.query(Post).filter(*P._visible_conditions(db, client_id, 14)).all()}
@@ -135,44 +140,165 @@ def _feed(db, client_id):
 
 @pytest.fixture
 def shared_post(db):
-    for i, name in ((1, "Dr. Joe Raffaele"), (2, "Nikolina Lauc"), (3, "Gordan Lauc")):
+    for i, name in ((1, "Dr. Joe Raffaele"), (2, "Nikolina Lauc"), (3, "Gordan Lauc"), (4, "Noah Laith")):
         db.add(Client(id=i, name=name, specialty="longevity", topics=[]))
     db.commit()
 
-    def add(client_id, score, priority=False, pid=None):
-        db.add(Post(client_id=client_id, source_type="creator", source_ref=ATTIA,
-                    post_url="https://www.linkedin.com/posts/p-1", content_snippet="x",
-                    posted_at=now() - timedelta(days=1), relevance_score=score, is_priority=priority,
-                    language="en", dismissed=False))
+    def add(client_id, score=0.7, priority=False, url=URL, status=None, text="x", author=ATTIA):
+        p = Post(client_id=client_id, source_type="creator", source_ref=ATTIA, post_url=url,
+                 author_profile_url=author, content_snippet=text, posted_at=now() - timedelta(days=1), relevance_score=score,
+                 is_priority=priority, language="en", dismissed=False)
+        db.add(p)
         db.commit()
+        if status:
+            db.add(Draft(post_id=p.id, text="a comment", status=status))
+            db.commit()
+        return p
     return add
 
 
-def test_priority_row_below_its_own_bar_does_not_take_a_slot(db, shared_post):
-    shared_post(1, 0.2, priority=True)  # Joe: priority, but 2/10, so hidden from Joe himself
-    shared_post(3, 0.8)
-    shared_post(2, 0.7)
-    assert _feed(db, 1) == set()                    # hidden from Joe (below the 3/10 priority bar)
-    assert _feed(db, 3) and _feed(db, 2)            # so both slots go to clients who can comment
+def _card(db, client_id):
+    (p,) = P._paged_posts(db, client_id, "all", 14, 60, 0)
+    return p
 
 
-def test_priority_row_he_can_use_still_wins_a_slot(db, shared_post):
-    shared_post(1, 0.5, priority=True)
-    shared_post(3, 0.8)
-    shared_post(2, 0.7)
-    assert _feed(db, 1) and _feed(db, 3)
-    assert _feed(db, 2) == set()                    # third-best still loses: the cap itself is unchanged
+def test_a_post_wanted_by_many_clients_reaches_all_of_them(db, shared_post):
+    shared_post(1, 0.9, priority=True)
+    for c in (2, 3, 4):
+        shared_post(c, 0.5)
+    assert all(_feed(db, c) == {URL} for c in (1, 2, 3, 4))   # the cap would have left 3 and 4 out
 
 
-def test_below_bar_row_with_work_keeps_its_slot(db, shared_post):
-    shared_post(1, 0.2, priority=True)
-    joe_row = db.query(Post).filter(Post.client_id == 1).one()
-    db.add(Draft(post_id=joe_row.id, text="drafted before the bar existed", status="drafted"))
+def test_the_relevance_bar_still_applies_per_client(db, shared_post):
+    shared_post(1, 0.9)
+    shared_post(2, 0.3)                                      # 3/10, below the bar of 4
+    shared_post(3, 0.2, priority=True)                       # 2/10, below even the priority bar of 3
+    assert _feed(db, 1) == {URL} and _feed(db, 2) == set() and _feed(db, 3) == set()
+
+
+def test_card_names_other_clients_that_posted_or_approved(db, shared_post):
+    shared_post(1)
+    shared_post(2, status="posted")
+    shared_post(3, status="approved")
+    shared_post(4, status="drafted")                         # a draft nobody approved is not shown
+    card = _card(db, 1)
+    assert card.also_posted_by == ["Nikolina Lauc"]
+    assert card.also_approved_for == ["Gordan Lauc"]
+
+
+def test_own_comment_is_not_listed_and_posted_beats_approved(db, shared_post):
+    mine = shared_post(1, status="posted")
+    other = shared_post(2, status="posted")
+    db.add(Draft(post_id=other.id, text="second version", status="approved"))
     db.commit()
-    shared_post(3, 0.8)
-    shared_post(2, 0.7)
-    assert _feed(db, 1) and _feed(db, 3)
-    assert _feed(db, 2) == set()
+    card = _card(db, 1)
+    assert card.id == mine.id
+    assert card.also_posted_by == ["Nikolina Lauc"] and card.also_approved_for == []
+
+
+def test_same_post_under_an_edited_slug_still_matches(db, shared_post):
+    shared_post(1)
+    shared_post(2, url=URL.replace("_sleep-", "_sleep-and-ageing-").replace("AN9B", "EVjr"), status="posted")
+    assert _card(db, 1).also_posted_by == ["Nikolina Lauc"]
+
+
+def test_a_different_post_by_the_same_author_does_not_match(db, shared_post):
+    shared_post(1)
+    shared_post(2, url=URL.replace("7520308138625953793", "7520308138625953999"), status="posted")
+    assert _card(db, 1).also_posted_by == []
+
+
+TEXT = "Sleep is the most underrated longevity intervention we have, and here is what the data says."
+
+
+def test_activity_and_ugcpost_urls_of_one_post_match_on_author_and_text(db, shared_post):
+    # Seen in production: the scraper gave one client the activity id and another the ugcPost id.
+    shared_post(1, text=TEXT)
+    shared_post(2, url=URL.replace("activity-7520308138625953793", "ugcPost-7520308130000000000"),
+                text=TEXT, status="posted")
+    assert _card(db, 1).also_posted_by == ["Nikolina Lauc"]
+
+
+def test_same_hashtag_slug_but_different_text_is_a_different_post(db, shared_post):
+    # 79 slugs in production are shared by different posts (authors reuse hashtag slugs).
+    shared_post(1, text=TEXT)
+    shared_post(2, url=URL.replace("7520308138625953793", "7520308138625953999"),
+                text="A completely different post about protein intake and muscle, with its own data.",
+                status="posted")
+    assert _card(db, 1).also_posted_by == []
+
+
+def test_same_text_from_a_different_author_is_a_different_post(db, shared_post):
+    shared_post(1, text=TEXT)
+    shared_post(2, url=URL.replace("7520308138625953793", "7520308138625953999"), text=TEXT,
+                author="https://www.linkedin.com/in/someone-else/", status="posted")
+    assert _card(db, 1).also_posted_by == []
+
+
+def test_text_with_like_wildcards_matches_exactly(db, shared_post):
+    odd = "50% of adults_over 40 sleep < 6h \\ that is the headline from the new cohort data today"
+    shared_post(1, text=odd)
+    shared_post(2, url=URL.replace("activity-7520308138625953793", "ugcPost-7520308130000000000"),
+                text=odd, status="posted")
+    shared_post(3, url=URL.replace("activity-7520308138625953793", "ugcPost-7520308130000000001"),
+                text=odd.replace("% of", "X of").replace("_", "Y"), status="posted")
+    assert _card(db, 1).also_posted_by == ["Nikolina Lauc"]
+
+
+def test_digits_inside_a_longer_number_do_not_match(db, shared_post):
+    shared_post(1)
+    shared_post(2, url="https://www.linkedin.com/posts/someone-else_x-activity-17520308138625953793-ZZZZ",
+                status="posted")
+    assert _card(db, 1).also_posted_by == []
+
+
+def test_a_url_without_an_id_matches_only_itself(db, shared_post):
+    plain = "https://www.linkedin.com/posts/p-1"
+    shared_post(1, url=plain)
+    shared_post(2, url=plain, status="posted")
+    shared_post(3, url="https://www.linkedin.com/posts/p-10", status="posted")
+    assert _card(db, 1).also_posted_by == ["Nikolina Lauc"]
+
+
+def test_each_card_on_a_page_gets_its_own_label(db, shared_post):
+    other = URL.replace("7520308138625953793", "7520308138625950000").replace("_sleep-", "_diet-")
+    shared_post(1)
+    shared_post(1, url=other)
+    shared_post(2, status="posted")
+    shared_post(3, url=other, status="approved")
+    page = {p.post_url: p for p in P._paged_posts(db, 1, "all", 14, 60, 0)}
+    assert page[URL].also_posted_by == ["Nikolina Lauc"] and page[URL].also_approved_for == []
+    assert page[other].also_posted_by == [] and page[other].also_approved_for == ["Gordan Lauc"]
+
+
+def test_archived_client_counts_for_posted_but_not_approved(db, shared_post):
+    shared_post(1)
+    shared_post(2, status="posted")
+    shared_post(3, status="approved")
+    for cid in (2, 3):
+        db.get(Client, cid).archived = True
+    db.commit()
+    card = _card(db, 1)
+    assert card.also_posted_by == ["Nikolina Lauc"]           # still under the post on LinkedIn
+    assert card.also_approved_for == []                       # will never be posted
+
+
+def test_feed_page_reaches_the_api_with_the_label(db, shared_post):
+    from app.schemas import PostWithDrafts
+    shared_post(1)
+    shared_post(2, status="posted")
+    shared_post(3, status="posted")
+    out = PostWithDrafts.model_validate(_card(db, 1)).model_dump()
+    assert out["also_posted_by"] == ["Gordan Lauc", "Nikolina Lauc"]
+    assert out["also_approved_for"] == []
+
+
+def test_labelling_does_not_write_to_the_database(db, shared_post):
+    p = shared_post(1)
+    shared_post(2, status="posted")
+    _card(db, 1)
+    db.commit()                                               # a dirty row would be flushed here
+    assert db.get(Post, p.id).content_snippet == "x"
 
 
 # --- The read-only queue report (how to confirm R27 on live data) --------------------------
@@ -187,12 +313,9 @@ def test_queue_report_says_where_posts_went(db, shared_post):
     shared_post(1, 0.9, priority=True)
     shared_post(3, 0.8)
     shared_post(2, 0.7)
-    db.add(Post(client_id=2, source_type="creator", source_ref=ATTIA, post_url="https://www.linkedin.com/posts/p-2",
-                content_snippet="x", posted_at=now() - timedelta(days=2), relevance_score=0.1, language="en"))
-    db.commit()
+    shared_post(2, 0.1, url="https://www.linkedin.com/posts/p-2")
     r = report(db, db.get(Client, 2))
     assert r["posts_stored_in_window"] == 2
-    assert r["where_they_went"] == {"lost to the two-feeds-per-post cap": 1, "below the relevance bar": 1}
-    assert r["cap_slots_taken_by"] == {"Dr. Joe Raffaele (priority)": 1, "Gordan Lauc": 1}
+    assert r["where_they_went"] == {"in the feed": 1, "below the relevance bar": 1}
     assert r["profiles"]["assigned_creators"] == 1
     assert r["profiles"]["assigned_but_not_fetched"] == ["A Prospect (prospect)"]

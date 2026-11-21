@@ -4,6 +4,7 @@ export default function Badge({ tone = "neutral", children }) {
     success: { bg: "var(--success-bg)", color: "var(--success)" },
     danger: { bg: "var(--danger-bg)", color: "var(--danger)" },
     primary: { bg: "#eff4ff", color: "var(--primary)" },
+    warning: { bg: "#fff7ed", color: "#b45309" },
   };
   const { bg, color } = tones[tone] ?? tones.neutral;
 

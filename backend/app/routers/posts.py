@@ -5,8 +5,8 @@ from difflib import SequenceMatcher
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, exists, func, or_, select
-from sqlalchemy.orm import Session, aliased, selectinload
+from sqlalchemy import and_, case, exists, func, or_
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
@@ -84,78 +84,100 @@ _DRAFTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "drafte
 _APPROVED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "approved"))
 _POSTED = exists().where(and_(Draft.post_id == Post.id, Draft.status == "posted"))
 
-# A post reaches at most this many client feeds — the two scoring highest for it. The same
-# LinkedIn post was being served to up to 8 client feeds at once, so one author collected comments
-# from most of the roster and their audience noticed ("we're all commenting under the same
-# accounts, my clients are flagging it").
-MAX_FEEDS_PER_POST = 2
+# No cap on how many client feeds one LinkedIn post reaches. Until 21 Nov 2026 a post went only to
+# the two clients scoring highest for it (so our whole roster didn't end up commenting under one
+# author). Every client tracks the same ~290 people, so most posts were wanted by 7-8 clients and
+# the lower-scoring ones (Noah, Silvana, Nikolina, Joe) lost almost every contest and got thin
+# queues. Lara's call (Slack, 20 Nov): show every relevant post to every client, mark the ones
+# other clients already commented on, and let the account manager decide. That marking is
+# _others_on_post below; the team rule is still "no more than 2 of our clients under one post".
 
-# Grandfather clause: ANY draft at all, including rejected. Wider than _HAS_WORK on purpose — a
-# post the reviewer has already looked at should not be re-ranked out from under them.
-_HAS_ANY_DRAFT = exists().where(Draft.post_id == Post.id)
+# One LinkedIn post can be stored under different URLs for different clients, so matching on the
+# full URL misses some. Two ways it happens, both seen in production (21 Nov 2026):
+#   - the slug changes when the author edits the post; the numeric id stays (3 of 1,170 posts in
+#     30 days). Matched by the id.
+#   - the scraper returns the post's activity id for one client and its ugcPost id for another
+#     (two different numbers, ~12 posts in the whole table). Matched by same author + same opening
+#     text. Not by slug: authors reuse hashtag slugs, and 79 slugs in production are shared by
+#     genuinely different posts.
+_URN_ID = re.compile(r"(?:activity|ugcPost|share)(?:[-:]|%3A)(\d{16,20})")
+_ANY_LONG_ID = re.compile(r"(\d{16,20})")
+_TEXT_KEY_CHARS = 100   # opening text compared across clients
+_TEXT_KEY_MIN = 40      # shorter posts ("Congratulations!") are too generic to match on text
 
 
-def _within_feed_quota():
-    """True when this row is one of the MAX_FEEDS_PER_POST highest-scoring feeds for its post_url,
-    or already carries work.
+def _linkedin_post_keys(url: str, author: str = "", text: str = "") -> set[str]:
+    """Keys that identify one LinkedIn post across clients: 'id:<n>', plus 'txt:<author>|<opening
+    text>' when the post has an author and enough text. Falls back to 'url:<url>' without an id."""
+    url = url or ""
+    m = _URN_ID.search(url) or _ANY_LONG_ID.search(url)
+    keys = {f"id:{m.group(1)}"} if m else ({f"url:{url}"} if url else set())
+    opening = (text or "")[:_TEXT_KEY_CHARS]
+    if author and len(opening) >= _TEXT_KEY_MIN:
+        keys.add(f"txt:{author}|{opening}")
+    return keys
 
-    Counts the rows that rank strictly AHEAD of this one rather than computing a rank, so it reads
-    as a plain SQL condition and composes into _visible_conditions with everything else. Ties break
-    on client_id so the ordering is deterministic and a feed cannot flicker between loads.
-    Costs ~22ms across the whole table given the posts(post_url) index; without that index it was
-    568ms, which is why the migration alongside this adds it.
 
-    An archived client's row never counts as ahead, unless a comment was actually posted from it.
-    Marwan Karnaby's rows kept taking slots after he was archived (9 from Noah and Silvana in 14
-    days) for comments nobody would ever post. A comment he DID post is still under that post on
-    LinkedIn, though, and the cap exists so the audience doesn't see our whole roster in one
-    thread, so that row keeps its place. It keeps only a place it already ranks for: like any
-    client's posted row, one ranked 3rd never displaces anyone, so three of our comments can
-    still sit under one post. Whether posted work should always take a slot is a team decision
-    for every client, not one to settle here.
+def _like_prefix(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-    The archived check is a hash probe (see client_active); the posted check only runs for archived
-    rows, and drafts(post_id) is indexed."""
-    other = aliased(Post)
-    mine = func.coalesce(Post.relevance_score, -1.0)
-    theirs = func.coalesce(other.relevance_score, -1.0)
-    # A row that is NOT in its own client's feed must not hold a slot in anyone else's. Priority
-    # rows rank first whatever they score, so a priority client's post scored 2/10 (below even the
-    # priority bar, so hidden from them) still took one of the two slots, and a client who could
-    # actually comment lost the post. Dr. Joe Raffaele has first claim on eight longevity accounts
-    # that other clients also track; every such post he could add nothing to cost one of them a
-    # slot. Mirrors the relevance rule in _visible_conditions: unscored rows and
-    # rows carrying work stay visible to their client, so they keep their place.
-    other_floor = case((other.is_priority, PRIORITY_MIN_RELEVANCE), else_=MIN_DRAFT_RELEVANCE)
-    other_visible = or_(
-        other.relevance_score.is_(None),
-        func.round(other.relevance_score * 10) >= other_floor,
-        exists().where(Draft.post_id == other.id,
-                       Draft.status.in_(("pending", "drafted", "approved", "posted"))),
+
+def _others_on_post(db: Session, client_id: int, posts: list[Post]) -> None:
+    """Set also_posted_by / also_approved_for on each post: the OTHER clients that already have a
+    comment posted under the same LinkedIn post, and those with one approved but not yet posted.
+
+    Only counts what was marked in the tool: a comment posted on LinkedIn but never marked
+    'posted' here is invisible to this. Archived clients count for posted (that comment is still
+    under the post on LinkedIn) but not for approved (it will never go out).
+
+    One query for the whole page. The plan starts from drafts in those two statuses (~2,700 rows
+    in production) and joins posts by primary key, so the LIKEs only run on those (EXPLAIN
+    ANALYZE, 21 Nov 2026). LIKE also works on SQLite in tests. An id LIKE can over-match (digits
+    inside a longer number), so every row is checked again against the exact keys in Python.
+    Must run before the feed trims content_snippet to its preview (the first 100 chars survive
+    that anyway)."""
+    keys = {p.id: _linkedin_post_keys(p.post_url, p.author_profile_url, p.content_snippet) for p in posts}
+    for p in posts:
+        p.also_posted_by, p.also_approved_for = [], []
+    wanted = set().union(*keys.values()) if keys else set()
+    if not wanted:
+        return
+    match = []
+    for k in wanted:
+        kind, _, val = k.partition(":")
+        if kind == "id":
+            match.append(Post.post_url.like(f"%{val}%"))
+        elif kind == "url":
+            match.append(Post.post_url == val)
+        else:
+            author, _, opening = val.partition("|")
+            match.append(and_(Post.author_profile_url == author,
+                              Post.content_snippet.like(_like_prefix(opening) + "%", escape="\\")))
+    rows = (
+        db.query(Post.post_url, Post.author_profile_url,
+                 func.substr(Post.content_snippet, 1, _TEXT_KEY_CHARS),
+                 Client.name, Client.archived, Draft.status)
+        .join(Draft, Draft.post_id == Post.id)
+        .join(Client, Client.id == Post.client_id)
+        .filter(Post.client_id != client_id,
+                Draft.status.in_(("posted", "approved")),
+                or_(*match))
+        .all()
     )
-    # Ordering key is (is_priority, relevance, client_id). Priority comes FIRST so a client given
-    # first claim on a creator keeps a slot even when two other clients score the post higher —
-    # that is the whole point of the flag. The second slot still goes to the next-best client.
-    ahead = (
-        select(func.count())
-        .select_from(other)
-        .where(
-            other.post_url == Post.post_url,
-            other.dismissed.is_(False),
-            other.client_id != Post.client_id,
-            other_visible,
-            or_(client_active(other.client_id),
-                exists().where(Draft.post_id == other.id, Draft.status == "posted")),
-            or_(
-                and_(other.is_priority.is_(True), Post.is_priority.is_(False)),
-                and_(other.is_priority == Post.is_priority, theirs > mine),
-                and_(other.is_priority == Post.is_priority, theirs == mine,
-                     other.client_id < Post.client_id),
-            ),
-        )
-        .scalar_subquery()
-    )
-    return or_(ahead < MAX_FEEDS_PER_POST, _HAS_ANY_DRAFT)
+    found = [(_linkedin_post_keys(url, author, opening), name, archived, status)
+             for url, author, opening, name, archived, status in rows]
+    for p in posts:
+        mine = keys[p.id]
+        done, waiting = set(), set()
+        for theirs, name, archived, status in found:
+            if not (mine & theirs):
+                continue
+            if status == "posted":
+                done.add(name)
+            elif not archived:
+                waiting.add(name)
+        p.also_posted_by = sorted(done)
+        p.also_approved_for = sorted(waiting - done)
 
 
 # The per-view predicates, in SQL. These define what each tab contains.
@@ -171,8 +193,8 @@ _VIEW_SQL = {
 def _visible_conditions(db: Session, client_id: int, max_age_days: int):
     """The 'is this post in the client's feed at all' rules, as SQL conditions: not dismissed,
     fresh enough (or carrying work), above the relevance floor (or unscored/carrying work), not written
-    by the client themselves or a same-company colleague, and among the top MAX_FEEDS_PER_POST
-    client feeds for that post.
+    by the client themselves or a same-company colleague. Other clients' feeds don't matter here:
+    a post shows for every client it passes these for (see _others_on_post).
 
     Shared by the feed query and the count/summary aggregates so all three agree by construction.
     The author exclusion mirrors profiles.is_own_or_colleague_post(): handle or member ID, in SQL."""
@@ -189,7 +211,6 @@ def _visible_conditions(db: Session, client_id: int, max_age_days: int):
         or_(Post.language == "en", Post.language.is_(None), _HAS_WORK),
         or_(Post.relevance_score.is_(None),
             func.round(Post.relevance_score * 10) >= _relevance_floor(), _HAS_WORK),
-        _within_feed_quota(),
     ]
     client = db.get(Client, client_id)
     handles, ids = own_identities(db, client) if client else (set(), set())
@@ -245,6 +266,9 @@ def _paged_posts(db: Session, client_id: int, view: str, max_age_days: int,
     # truncated text back and permanently destroy the post body. Detaching makes that impossible.
     # The drafting routes read their own Post row, so they still get the full text.
     db.expunge_all()
+    # After expunging: also_posted_by / also_approved_for are plain attributes, not columns, and
+    # must not be set on rows the session could flush.
+    _others_on_post(db, client_id, posts)
     for p in posts:
         body = p.content_snippet or ""
         if len(body) > _LIST_PREVIEW_CHARS:

@@ -49,8 +49,7 @@ failure. The items being built now (Phases 0, 1, 3 and 4) are in the git history
   relevance score is retried when the post comes back, and a priority row below its own bar no
   longer takes one of the two feed slots. To see what still thins a queue, run (read-only)
   `python -m app.jobs.queue_report "Nikolina"` from backend/ with the production DATABASE_URL. It
-  counts posts by where they went (in the feed, below the bar, lost to the cap and to whom,
-  dismissed, other language) and lists assigned profiles that are never fetched. If few posts are
+  counts posts by where they went (in the feed, below the bar, dismissed, other language) and lists assigned profiles that are never fetched. If few posts are
   stored at all, the next lever is `_GLOBAL_POSTS` (1 post per creator per fetch), which costs
   Apify credit per extra post and one relevance call per post per client.
 - **Reposts already stored.** Stopping reposts applies to new fetches. The ones already in feeds
@@ -58,8 +57,11 @@ failure. The items being built now (Phases 0, 1, 3 and 4) are in the git history
 - **Fact-check badge conflates opinion with fact.** 23% of "grounded" spans are grounded in a
   client's stated belief, and the card shows them as "Nothing to verify". Split the badge (from
   the post vs from their stated view), and consider a `contested` provenance level.
-- **Per-author cap.** A post reaches at most 2 client feeds, but a prolific author still sees
-  most of the roster across different posts.
+- **Two-feeds cap removed (21 Nov 2026, Lara's call in Slack, 20 Nov).** Every relevant post now
+  shows for every client, and the card names the other clients already posted (or approved) under
+  the same LinkedIn post; the account manager keeps to "max 2 of our clients per post". The label
+  only knows comments marked Posted in the tool. Still open: a prolific author can see most of
+  the roster across different posts (a per-author weekly cap would be a team decision).
 
 ## Watch after the Phase 1-4 deploy
 

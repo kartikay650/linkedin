@@ -177,6 +177,11 @@ class PostOut(BaseModel):
     # True when the feed shipped only a preview of content_snippet (see _paged_posts); the card
     # then offers "Show full post", which reads GET /posts/{id}/text.
     preview_truncated: bool = False
+    # Other clients with a comment under the same LinkedIn post: posted, or approved and not yet
+    # posted. Set by the feed (_others_on_post); the card shows them so the account manager can
+    # keep to "no more than 2 of our clients under one post".
+    also_posted_by: list[str] = []
+    also_approved_for: list[str] = []
 
     class Config:
         from_attributes = True
