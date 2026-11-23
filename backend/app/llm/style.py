@@ -33,6 +33,10 @@ LENGTH: your judgement, taken from the post. Most comments are short and a singl
 
 LANGUAGE — never use:
 - emojis, exclamation points, em dashes (use periods or commas)
+- semicolons, and sentences built around a colon ("One thing stands out here: the importance of X",
+  "This highlights an important point: X"). People don't type these in a casual comment; they read
+  like an article. Use two short sentences, or a comma, or just say the second half.
+- these over-used phrases: "really matters", "the fact that", "I'll be watching", "what stands out"
 - "it's not X, it's Y" / "it's not about X, it's about Y" — and more broadly, do NOT define things by negation. State what something IS, not what it isn't. Lead with the affirmative claim. Never use the "not this, but that" contrast, "isn't ... it's ...", or a clipped tailing negation ("no guessing") as the move — it is the clearest AI tell.
 - praise openers: "Great post", "Great point", "Love this", "Interesting take", "Great reminder", "Insightful"
 - the "Curious ..." / "I wonder ..." / "Wondering ..." OPENER — this is the single most over-used tic. NEVER open a comment with it. A genuine question is allowed occasionally, but lead with the actual question word (what / how / why / did), never with "Curious" or "I wonder".
@@ -135,6 +139,10 @@ _BANNED_SUBSTRINGS = [
     "my bet is", "i'd wager", "my money is on",
 ]
 
+# Maria, 23 Nov 2026: structures that still make comments sound AI-written, Nikolina's most.
+# Matched as whole words, so "somewhat stands out" is not "what stands out".
+_BANNED_PHRASES = ["really matters", "the fact that", "i'll be watching", "what stands out"]
+
 _PRAISE_OPENERS = [
     "great post", "great point", "love this", "interesting take", "insightful",
     # "so true" removed deliberately: agreeing with the POINT is how real people open a reply, and
@@ -146,6 +154,54 @@ _PRAISE_OPENERS = [
 _EMOJI_RE = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF❤]"
 )
+
+# A colon that introduces the rest of a sentence: "One thing stands out here: the importance of X",
+# "This highlights an important point: Longevity research...". Left alone: a time ("10:30") or a
+# link ("https://"), which have no space after the colon, and a title or event name, where a
+# capitalised word or a number sits on both sides ("Menopause: The Hidden Years",
+# "HLTH Europe 2026: Amsterdam").
+_COLON_RE = re.compile(r"([A-Za-z0-9]+)[)\"'\u2019\u201d]?:\s+[\"'\u2018\u201c(]?([A-Za-z0-9])")
+# A semicolon that ends an HTML entity ("R&amp;D") is not punctuation.
+_ENTITY_RE = re.compile(r"&#?[A-Za-z0-9]+;")
+
+
+def _real_semicolons(text: str) -> bool:
+    return ";" in _ENTITY_RE.sub("", text or "")
+
+
+def has_colon_sentence(text: str) -> bool:
+    for m in _COLON_RE.finditer(text or ""):
+        before, after = m.group(1), m.group(2)
+        title = (before[0].isupper() or before[0].isdigit()) and (after.isupper() or after.isdigit())
+        if not title:
+            return True
+    return False
+
+
+def plain_punctuation(text: str) -> str:
+    """Last pass on a comment the tool wrote: every semicolon becomes a comma.
+
+    Maria (23 Nov 2026): people don't type semicolons in a casual comment. A comma keeps it one
+    sentence, the way someone types it quickly. A full stop was tried first and is wrong here: it
+    turns "X; y" into two bare sentences, the stacked-statements shape the owner rejects most, and
+    it capitalised the next word ("mRNA" -> "MRNA"). After a question mark or full stop the
+    semicolon is simply dropped. Colons have no safe mechanical fix; check_violations flags them
+    and the drafter's retry rewrites them."""
+    t = (text or "").strip()
+    if not _real_semicolons(t):
+        return t
+    keep = _ENTITY_RE.findall(t)
+    t = _ENTITY_RE.sub("\x00", t)
+    parts = [p for p in (x.strip() for x in t.split(";")) if p]
+    out = ""
+    for i, p in enumerate(parts):
+        if i:
+            out += " " if out.endswith((".", "?", "!", ",")) else ", "
+        out += p
+    for e in keep:
+        out = out.replace("\x00", e, 1)
+    return out
+
 
 # Over-certainty / false precision — science should read nuanced, not black-and-white
 # (per Lara: e.g. "that explains it almost exactly" is too certain).
@@ -236,6 +292,13 @@ def check_violations(text: str) -> list[str]:
         v.append("em dash")
     if "!" in t:
         v.append("exclamation point")
+    # Maria, 23 Nov 2026: "people don't naturally use these in a casual comment". plain_punctuation
+    # turns a semicolon into a full stop after drafting; flagging it here as well means the retry
+    # rewrites it properly when it can, and an edited example carrying one isn't taught as voice.
+    if _real_semicolons(t):
+        v.append("semicolon")
+    if has_colon_sentence(t):
+        v.append("colon-led sentence")
     if _EMOJI_RE.search(t):
         v.append("emoji")
     # No sentence-count cap and no target word band: together they produced the fixed two-clause
@@ -279,5 +342,8 @@ def check_violations(text: str) -> list[str]:
             break
     for phrase in _BANNED_SUBSTRINGS:
         if phrase in low:
+            v.append(f"banned phrase: '{phrase}'")
+    for phrase in _BANNED_PHRASES:
+        if re.search(r"\b" + re.escape(phrase) + r"\b", low):
             v.append(f"banned phrase: '{phrase}'")
     return v

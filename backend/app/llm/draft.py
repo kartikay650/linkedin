@@ -1,11 +1,13 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
 
 from app.llm._llm import AzureClient
 
 from app.config import settings
 from app.llm.humanize import humanize_comments, keep_note
-from app.llm.style import HOUSE_STYLE, check_violations, has_negation_device, has_stacked_statements
+from app.llm.style import (HOUSE_STYLE, check_violations, has_negation_device, has_stacked_statements,
+                            plain_punctuation)
 from app.llm.utils import extract_json
 from app.models import Client, Post
 
@@ -714,7 +716,9 @@ def _hard_problems(text: str, avoid: list[str], allow_formula: bool) -> list[str
     sentence with a connector" is what produced the over-polished compound sentences; the caller
     sends a stacked comment to _fuse instead, which deletes a repeated sentence before it joins
     anything. Detection itself is unchanged (check_violations still reports it)."""
-    probs = [p for p in _draft_problems(text, avoid, None) if not p.startswith("stacked statements")]
+    probs = [p for p in _draft_problems(text, avoid, None) if not p.startswith("stacked statements")
+             # Fixed for free by plain_punctuation on the way out; a retry would only cost a call.
+             and p != "semicolon"]
     if allow_formula:
         probs = [p for p in probs if "shows up" not in p]
     return probs
@@ -890,6 +894,8 @@ def _unquestion(client: Client, text: str) -> str:
         )).get("text", "")).strip()
     except Exception:
         return text
+    # A semicolon has a safe mechanical fix, so it is fixed rather than costing the conversion.
+    out = plain_punctuation(out)
     if not out or _is_question(out) or check_violations(out):
         return text
     return out
@@ -954,6 +960,7 @@ def generate_drafts(client: Client, post: Post, count: int = 2, avoid_texts: lis
         results = [one(sh) for sh in shapes]
     out: list[str] = []
     for t in results:
+        t = plain_punctuation(t)
         if t and t not in out:
             out.append(t)
     # Never hand the reviewer a post whose only options are both questions. The candidates run in
@@ -1049,7 +1056,7 @@ def angle_draft(client: Client, post: Post, taken: list[str], avoid_texts: list[
             text = retry
     if has_stacked_statements(text):
         text = _fuse(client, text)
-    return text
+    return plain_punctuation(text)
 
 
 _DECLAIM_PROMPT = """This LinkedIn comment, written as {name}, contains a claim that would need
@@ -1097,7 +1104,7 @@ def strip_unverifiable(client: Client, post: Post, text: str, flagged: list[str]
     if not out:
         return text
     out = humanize_comments([out], _voice_block(client), keep=keep)[0]
-    out = _strip_negation(out) or text
+    out = plain_punctuation(_strip_negation(out)) or text
     # This rewrite runs after the drafter's own repair, so it needs the same one.
     return _fuse(client, out, keep) if has_stacked_statements(out) else out
 
@@ -1155,12 +1162,22 @@ _NO_QUESTION_RE = re.compile(
 TWEAK_CHIPS = {
     "angle": "",
     "shorter": "make it shorter: cut whatever is not doing work and keep its point",
-    "conversational": "make it sound more like something said out loud to the author: plainer "
-                      "words and a looser rhythm, the same point, and no longer than it is now",
+    # Maria, 23 Nov 2026: the buttons sometimes return almost the same comment, and the wording
+    # behind each could say more exactly what has to change. Each now names concrete moves and
+    # says a word or two swapped is not enough; refine_draft checks how much actually changed.
+    "conversational": "rewrite it the way this person would say it out loud to the author: everyday "
+                      "words in place of formal ones, contractions, a looser sentence shape (a short "
+                      "fragment or a casual opener is fine). Same point, no longer than it is now. "
+                      "Change the wording and the shape of the sentences, not just a word or two",
     "personality": "let more of this person's own personality come through, taken from how they "
-                   "write and the examples above: their word choice, their bluntness or humour. "
-                   "Do not add a claim, a credential, or anything about their own work",
-    "warmer": "make it warmer and more human, without any praise opener or clinical jargon",
+                   "write and the examples above: their word choice, their bluntness or humour, "
+                   "the way they open a thought. Rework the phrasing so a reader hears this "
+                   "specific person, not just a word or two swapped. Do not add a claim, a "
+                   "credential, or anything about their own work",
+    "warmer": "make it warmer and more human: speak to the author as a person (their effort, "
+              "their experience or how they must feel about what they shared), in kinder, "
+              "everyday words. Change how it reads, not just a word or two. No praise opener and "
+              "no clinical jargon",
     "no_question": "rewrite it as a plain statement rather than a question: keep the same point and "
                    "the same specific detail, and do not end with a question mark",
     # Spelled out because "personal opinion" alone let the model decide a judgement such as "this is
@@ -1274,6 +1291,46 @@ def same_words(a: str, b: str) -> bool:
     return _norm_words(a) == _norm_words(b)
 
 
+# Buttons whose whole job is to make the comment READ differently. A result that swaps two or three
+# words does what the button says on paper, and the reviewer still sees the same comment (Maria,
+# 23 Nov 2026). Production, 13-23 Nov: about 1 press in 8 of these changed under 30% of the words,
+# and short comments flipped between the same two versions ("Give me a proper meal..." / "I'll
+# take a proper meal..."). Remove opinion, No question and typed requests are left out on
+# purpose: they ask for a targeted edit, where a small change is the right answer.
+_STYLE_CHIPS = frozenset({"conversational", "personality", "warmer"})
+_MIN_STYLE_CHANGE = 0.3
+# "Shorter" through the rewrite path (a comment of one sentence) has to lose at least this share.
+_MIN_SHORTER_CUT = 0.15
+TWEAK_SMALL = ("Only a small change was possible for this one. For a clearly different comment, try "
+               "Different angle, or type what to change.")
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (text or "").lower().replace("\u2019", "'"))
+
+
+def word_change(a: str, b: str) -> float:
+    """Share of the comment that changed between `a` and `b`, by words in order: 0.0 is the same
+    words, 1.0 nothing in common."""
+    wa, wb = _words(a), _words(b)
+    if not wa and not wb:
+        return 0.0
+    return 1.0 - SequenceMatcher(None, wa, wb).ratio()
+
+
+def change_too_small(chip: str | None, revised: str, current: str,
+                     earlier: list[str] | None = None) -> bool:
+    """Would the reviewer see this result as the comment she already had? Only judged for the
+    style buttons and Shorter; any other request returns False."""
+    if chip in _STYLE_CHIPS:
+        return (word_change(revised, current) < _MIN_STYLE_CHANGE
+                or any(same_words(revised, e) for e in (earlier or []) if e))
+    if chip == "shorter":
+        before = len(_words(current))
+        return bool(before) and len(_words(revised)) > before * (1 - _MIN_SHORTER_CUT)
+    return False
+
+
 def tweak_unchanged(revised: str, current: str) -> bool:
     """Did a Tweak change nothing the reviewer would count as a change?
 
@@ -1325,7 +1382,7 @@ def shorten_draft(client: Client, post: Post, current_text: str, **context) -> t
             pick = 0
         if 1 <= pick <= len(sents):
             return sents[pick - 1], ""
-    return refine_draft(client, post, current_text, TWEAK_CHIPS["shorter"], **context)
+    return refine_draft(client, post, current_text, TWEAK_CHIPS["shorter"], chip="shorter", **context)
 
 
 # Gate checks that can contradict an explicit Tweak request, and what the card says when the retry
@@ -1358,10 +1415,34 @@ def _wants_no_question(instruction: str) -> bool:
     return bool(_NO_QUESTION_RE.search(instruction or ""))
 
 
+def _bigger_change(chip: str | None, retry: str, first: str, current: str) -> bool:
+    """Did the size retry do better than the first attempt? For Shorter that means fewer words;
+    for a style button, more of the comment changed."""
+    if chip == "shorter":
+        return len(_words(retry)) < len(_words(first))
+    return word_change(retry, current) > word_change(first, current)
+
+
+def _size_fix(chip: str | None, attempt: str, shown: list[str]) -> str:
+    """What the one Tweak retry is told when the first attempt changed too little."""
+    if chip == "shorter":
+        fix = (f'Your first attempt was "{attempt}". It is barely shorter. Cut at least a quarter of '
+               "the words and keep the point. ")
+    else:
+        fix = (f'Your first attempt was "{attempt}". It changed only a few words, so the reviewer '
+               "will see the same comment again. Rework the wording and the shape of the "
+               "sentences in the way she asked, keeping the same point. ")
+    if shown:
+        fix += ("Do not return any of these earlier versions either: "
+                + " | ".join(f'"{e}"' for e in shown[-4:]) + ". ")
+    return fix
+
+
 def refine_draft(client: Client, post: Post, current_text: str, instruction: str,
                  avoid_texts: list[str] | None = None, voice_examples: list[str] | None = None,
                  global_texts: list[str] | None = None,
-                 sibling_texts: list[str] | None = None) -> tuple[str, str]:
+                 sibling_texts: list[str] | None = None, chip: str | None = None,
+                 earlier: list[str] | None = None) -> tuple[str, str]:
     """Revise a single draft per a reviewer's request — through the SAME guardrails as
     generate_drafts (they were previously bypassed, which let the 'Curious'/praise-slop tics back in on
     every tweak). Builds the self-aware anti-repetition memory + sibling context, applies the request
@@ -1419,8 +1500,18 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     # comment that the drafter was free to write at any length, and it contradicted the house
     # style ("LENGTH: your judgement, taken from the post"). Genuine rambling is already a
     # violation inside _hard_problems at 60 words, which is where a length rule belongs.
-    if probs or unmet or left:
+    # A style button (or Shorter) that came back with a word or two changed, or with a version she
+    # already had (Maria, 23 Nov 2026). It joins the one retry below rather than adding a call of
+    # its own, so a press never costs more model calls than before. A result identical to her
+    # comment is left to the route, which already says "nothing changed".
+    sized = chip in _STYLE_CHIPS or chip == "shorter"
+    shown = [e for e in (earlier or []) if e and not same_words(e, current_text)] if sized else []
+    small = (change_too_small(chip, text, current_text, shown)
+             and not same_words(text, current_text))
+    if probs or unmet or left or small:
         fix = ("; ".join(probs) + ". ") if probs else ""
+        if small:
+            fix += _size_fix(chip, text, shown)
         if unmet:
             fix += ("It must NOT be a question. Rewrite it as a plain statement that makes the same "
                     "point, and do not end with a question mark. ")
@@ -1438,7 +1529,14 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
                 # Never accept a retry that still asks when the operator asked it not to, or that
                 # carries more of a view than the first attempt when she asked for none.
                 and not (no_question and _is_question(retry))
-                and not (no_opinion and len(opinion_phrases(retry)) > len(left))):
+                and not (no_opinion and len(opinion_phrases(retry)) > len(left))
+                # For a style button or Shorter only: never swap in her own comment or a version
+                # she already had, and when size was the only reason for the retry it has to be
+                # the bigger change. A typed request ("put it back the way it was") or Remove
+                # opinion keeps the old acceptance rule.
+                and not (sized and (same_words(retry, current_text)
+                                    or any(same_words(retry, e) for e in shown)))
+                and (probs or unmet or left or _bigger_change(chip, retry, text, current_text))):
             text = retry
             # The gate can overrule her ("expand on this" vs the 60-word limit, "firmer" vs
             # the over-certainty check). Say what it enforced instead of dropping it silently.
@@ -1452,6 +1550,12 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
         if _is_question(fixed):
             return current_text, ""
         text = fixed
+    if chip in _STYLE_CHIPS and any(same_words(text, e) for e in shown):
+        # Still one of the versions she already saw: showing it would be the flip-flop reviewers
+        # read as "the same comment again". Keep hers; the route reports that nothing changed.
+        return current_text, TWEAK_SMALL
+    if change_too_small(chip, text, current_text, shown) and not same_words(text, current_text):
+        not_done = " ".join(x for x in (not_done, TWEAK_SMALL) if x)
     if no_opinion and not same_words(text, current_text) and opinion_phrases(text):
         # Changed, but some of the view survived both attempts. Show the result and say what is
         # left, rather than present it as done.
@@ -1464,4 +1568,4 @@ def refine_draft(client: Client, post: Post, current_text: str, instruction: str
     # that reason; leaving it on the tweak path meant the same comment was treated differently
     # depending on which button was pressed. Length is already enforced by the write rules in
     # the prompt and by the _hard_problems regenerate above, both of which keep full context.
-    return text, not_done
+    return plain_punctuation(text), not_done

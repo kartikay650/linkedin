@@ -696,14 +696,24 @@ def refine_draft_route(draft_id: int, payload: RefineDraftRequest, db: Session =
     # Same anti-repetition context as a fresh draft, so a Tweak is fully guarded too (no more
     # 'Curious'/praise-slop leaking back in through the refine path).
     recent, global_recent, approved, siblings = _draft_context(db, post)
+    # Earlier versions of this comment: what the tool first wrote and what each earlier press
+    # started from. A style button that hands one of them back is the flip-flop between two
+    # versions reviewers read as "it returned the same comment" (Maria, 23 Nov 2026).
+    earlier = [t for (t,) in db.query(TweakEvent.before_text)
+               .filter(TweakEvent.draft_id == draft.id).order_by(TweakEvent.id).all() if t]
+    if draft.original_text:
+        earlier.insert(0, draft.original_text)
     context = dict(avoid_texts=recent, voice_examples=approved, global_texts=global_recent,
-                   sibling_texts=siblings)
+                   sibling_texts=siblings, earlier=earlier)
     if chip == "shorter" and not typed:
         # Picks one of her sentences verbatim, which can't follow typed words; with them, the
         # normal Tweak path does "shorter" and what she typed together.
         revised, not_done = shorten_draft(post.client, post, current, **context)
     else:
-        revised, not_done = refine_draft(post.client, post, current, instruction, **context)
+        # The change-size check runs for a button pressed on its own. With typed words the
+        # request is hers, and a small, exact edit may be exactly what she asked for.
+        revised, not_done = refine_draft(post.client, post, current, instruction,
+                                         chip=None if typed else chip, **context)
     if not (revised or "").strip():
         # The model call failed. This used to hand back her own text as if it were the tweak,
         # then run it through the fact-check rewrite and log a tweak that never happened.

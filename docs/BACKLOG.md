@@ -4,6 +4,18 @@ Raised in Maria's feedback (3 Nov 2026) and the five-reviewer audit that followe
 purpose: each needs a decision or more design before it can be built without recreating an old
 failure. The items being built now (Phases 0, 1, 3 and 4) are in the git history, not here.
 
+## Maria, 23 Nov 2026 (Baba's 10 Nov thread)
+
+- Done 24 Nov: semicolons, colon-led sentences and "really matters" / "the fact that" /
+  "I'll be watching" / "what stands out" banned for all clients; style buttons that change under
+  30% of the words, or hand back an earlier version, get the one retry and otherwise say so.
+- Waiting on Kartikay: client knowledge (her points 2 and 5, and old item 4), see
+  docs/superpowers/specs/2026-11-24-client-knowledge-design.md.
+- Item 6 (posts matching the client's own content) parked 24 Nov, see
+  docs/superpowers/specs/2026-11-22-content-doc-topic-matching-design.md.
+- Data, 23 Nov: Maria's phrases and questions are rare in what the tool writes for Nikolina (0
+  and 6 of 229 approved/posted first drafts in 30 days). Asked her for screenshots.
+
 ## Blocked on an answer
 
 - **Learn from published comments (Maria #3).** The plan was to rotate up to five human-edited,
